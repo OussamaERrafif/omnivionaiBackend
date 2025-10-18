@@ -6,7 +6,7 @@ from typing import Optional
 # Google API imports (commented out - replaced with OpenAI)
 # from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
-from langchain.callbacks import StreamingStdOutCallbackHandler
+from langchain_core.callbacks import StreamingStdOutCallbackHandler
 
 from .config import Config
 
