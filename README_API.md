@@ -50,7 +50,7 @@ A FastAPI-based REST API for the AI Deep Search system - Academic Research Paper
 
 ```bash
 cd backend
-python api.py
+python app.py
 ```
 
 The server will start on `http://localhost:8000`
@@ -288,10 +288,10 @@ The API uses the configuration from `agents/config.py`. Key settings:
 
 ```bash
 # With auto-reload
-python api.py
+python app.py
 
 # Or using uvicorn directly
-uvicorn api:app --reload --host 0.0.0.0 --port 8000
+uvicorn app:app --reload --host 0.0.0.0 --port 8000
 
 # With custom port
 uvicorn api:app --reload --host 0.0.0.0 --port 8080

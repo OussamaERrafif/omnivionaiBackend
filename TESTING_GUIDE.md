@@ -6,7 +6,7 @@
 
 ```powershell
 cd backend
-python api.py
+python app.py
 ```
 
 The server should start on `http://localhost:8000`
@@ -212,7 +212,7 @@ Open the generated research paper and verify:
 Terminal 1:
 ```powershell
 cd backend
-python api.py
+python app.py
 ```
 
 Terminal 2:
@@ -272,7 +272,7 @@ pnpm dev
 
 ### Enable Verbose Logging
 
-In `api.py` or orchestrator, add print statements:
+In `app.py` or orchestrator, add print statements:
 
 ```python
 print(f"DEBUG: Web results: {web_results}")

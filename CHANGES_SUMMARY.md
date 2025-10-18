@@ -112,7 +112,7 @@ Structure:
 1. **Start Backend:**
    ```powershell
    cd backend
-   python api.py
+   python app.py
    ```
 
 2. **Test Query:**
