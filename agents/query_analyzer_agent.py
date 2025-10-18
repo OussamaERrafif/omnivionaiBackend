@@ -5,7 +5,7 @@ Query Analyzer Agent for Academic Research Paper Generator
 import json
 from typing import Dict, Any, List
 
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 
 from .base_agent import BaseAgent
 

@@ -5,7 +5,7 @@ Reasoning Agent for Academic Research Paper Generator
 import re
 from typing import List
 
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 
 from .base_agent import BaseAgent
 from .data_models import ProcessedContent

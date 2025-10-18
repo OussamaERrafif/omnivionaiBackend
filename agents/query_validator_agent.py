@@ -5,7 +5,7 @@ Validates if a query is meaningful before starting the search process
 
 import json
 from typing import Dict, Any
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 from .base_agent import BaseAgent
 
 

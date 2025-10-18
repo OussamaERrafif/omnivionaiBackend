@@ -9,7 +9,7 @@ from typing import List, Dict, Any
 
 import requests
 from bs4 import BeautifulSoup
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from urllib.parse import urlparse
 
@@ -319,7 +319,7 @@ class ResearchAgent(BaseAgent):
 Return ONLY a JSON list of unique, meaningful phrases (max 6 additional terms).
 Example format: ["machine learning agent", "autonomous software", "AI system architecture"]"""
 
-            from langchain.prompts import PromptTemplate
+            from langchain_core.prompts import PromptTemplate
             prompt = PromptTemplate(input_variables=["text"], template="{text}")
             chain = prompt | self.llm
             result = await chain.ainvoke({"text": expansion_prompt})
@@ -668,7 +668,7 @@ Return ONLY a JSON list of specific, focused search terms (avoid duplicating alr
 ["specific term 1", "specific term 2", ...]"""
 
         try:
-            from langchain.prompts import PromptTemplate
+            from langchain_core.prompts import PromptTemplate
             chain = PromptTemplate(input_variables=["text"], template="{text}") | self.llm
             result = await chain.ainvoke({"text": prompt})
             
