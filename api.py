@@ -150,6 +150,7 @@ app.add_middleware(
 orchestrator = Orchestrator()
 
 @app.get("/")
+@app.head("/")
 async def root():
     """
     Root endpoint providing API information and available endpoints.
@@ -169,6 +170,7 @@ async def root():
     }
 
 @app.get("/health")
+@app.head("/health")
 async def health_check():
     """
     Health check endpoint for monitoring and load balancers.
@@ -176,7 +178,7 @@ async def health_check():
     Returns:
         Dict: Health status
     """
-    return {"status": "healthy"}
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
 @app.get("/test-search/{query}")
 async def test_search(query: str):
