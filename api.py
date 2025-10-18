@@ -586,7 +586,7 @@ async def search_research_paper_sync(query: str):
 if __name__ == "__main__":
     uvicorn.run(
         "api:app",
-        host="localhost",
+        host="0.0.0.0",
         port=8000,
         reload=True
     )
