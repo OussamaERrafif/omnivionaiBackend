@@ -3,6 +3,9 @@ uvicorn[standard]
 pydantic
 langchain
 langchain-openai
+langchain-community
 supabase>=2.0.0
 python-dotenv>=1.0.0
+requests
+beautifulsoup4
 
