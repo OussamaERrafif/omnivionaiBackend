@@ -107,68 +107,74 @@ Analyze the claim against the source and respond with your single-word verdict n
 
     async def verify_claims(self, summaries: List[ProcessedContent]) -> List[ProcessedContent]:
         """
-        Verify all claims in summaries against their source content.
+        Verify all claims in summaries against their source content using batched processing.
         
-        Processes each summary to verify that its claims are supported by the
-        source content. Adjusts confidence scores based on verification results:
-        - VERIFIED: Full confidence (1.0x multiplier)
-        - PARTIAL: High confidence (0.9x multiplier)
-        - UNSUPPORTED: Reduced confidence (0.5x multiplier)
-        - CONTRADICTED: Very low confidence (0.2x multiplier)
-        
-        Includes a safety mechanism to ensure at least 3 sources remain after
-        verification by adding top-scoring sources with reduced confidence if needed.
+        Processes summaries in batches for improved performance. Each batch is verified
+        concurrently, then confidence scores are adjusted based on verification results.
         
         Args:
             summaries (List[ProcessedContent]): List of summaries to verify
             
         Returns:
-            List[ProcessedContent]: Verified summaries with adjusted confidence scores.
-                                   Only includes summaries above confidence threshold (0.05).
-                                   
-        Note:
-            - Applies rate limiting between verification calls
-            - Continues processing on individual failures (with reduced confidence)
-            - Ensures minimum of 3 sources in output for research quality
+            List[ProcessedContent]: Verified summaries with adjusted confidence scores
         """
+        if not summaries:
+            return []
+            
         verified_summaries = []
-
-        for summary in summaries:
+        batch_size = Config.VERIFICATION_BATCH_SIZE  # Process verifications concurrently
+        
+        print(f"   🔍 Verifying {len(summaries)} summaries in batches of {Config.VERIFICATION_BATCH_SIZE}")
+        
+        # Process summaries in batches
+        for i in range(0, len(summaries), batch_size):
+            batch = summaries[i:i + batch_size]
+            print(f"   🔄 Processing verification batch {i//batch_size + 1}/{(len(summaries) + batch_size - 1)//batch_size}")
+            
+            # Create verification tasks for this batch
+            tasks = []
+            for summary in batch:
+                task = self._verify_single_claim(summary)
+                tasks.append(task)
+            
+            # Execute batch concurrently
             try:
-                chain = self.prompt | self.llm
-                result = await chain.ainvoke({
-                    "claim": summary.summary,
-                    "source_content": summary.source.content[:1000]  # Limit content length
-                })
+                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Process results
+                for j, result in enumerate(batch_results):
+                    summary = batch[j]
+                    if isinstance(result, Exception):
+                        print(f"   ❌ Verification failed for summary: {result}")
+                        # Include with reduced confidence if verification fails
+                        summary.confidence_score *= 0.85
+                        verified_summaries.append(summary)
+                        continue
+                    
+                    verification = result
+                    
+                    # Adjust confidence based on verification
+                    if "VERIFIED" in verification.upper():
+                        confidence_multiplier = 1.0
+                    elif "PARTIAL" in verification.upper():
+                        confidence_multiplier = 0.9
+                    elif "UNSUPPORTED" in verification.upper():
+                        confidence_multiplier = 0.5
+                    else:  # CONTRADICTED or other
+                        confidence_multiplier = 0.2
 
-                verification = result.content if hasattr(result, 'content') else str(result)
+                    # Update confidence score
+                    summary.confidence_score *= confidence_multiplier
 
-                # Adjust confidence based on verification (more lenient scoring)
-                if "VERIFIED" in verification.upper():
-                    confidence_multiplier = 1.0
-                elif "PARTIAL" in verification.upper():
-                    confidence_multiplier = 0.9  # Increased from 0.8 to 0.9
-                elif "UNSUPPORTED" in verification.upper():
-                    confidence_multiplier = 0.5  # Increased from 0.3 to 0.5
-                else:  # CONTRADICTED or other
-                    confidence_multiplier = 0.2  # Increased from 0.1 to 0.2
-
-                # Update confidence score
-                summary.confidence_score *= confidence_multiplier
-
-                # Only include if confidence is above threshold (lowered threshold)
-                if summary.confidence_score > 0.05:  # Lowered from 0.1 to 0.05
-                    verified_summaries.append(summary)
-
-                await asyncio.sleep(Config.RATE_LIMIT_DELAY)
-
+                    # Only include if confidence is above threshold
+                    if summary.confidence_score > 0.05:
+                        verified_summaries.append(summary)
+                        
             except Exception as e:
-                print(f"Verification error: {e}")
-                # Include with slightly reduced confidence if verification fails
-                summary.confidence_score *= 0.85  # Less penalty for verification failures
-                verified_summaries.append(summary)
-
-        print(f"   Verified {len(verified_summaries)}/{len(summaries)} summaries")
+                print(f"   ❌ Batch verification error: {e}")
+                continue
+        
+        print(f"   ✅ Completed verification: {len(verified_summaries)}/{len(summaries)} summaries verified")
         
         # Safety mechanism: ensure we have at least some sources
         if len(verified_summaries) < 3 and len(summaries) > 0:
@@ -184,4 +190,24 @@ Analyze the claim against the source and respond with your single-word verdict n
             print(f"   ✅ Adjusted to {len(verified_summaries)} total sources")
         
         return verified_summaries
+    
+    async def _verify_single_claim(self, summary: ProcessedContent) -> str:
+        """
+        Verify a single claim against its source content.
+        
+        Args:
+            summary (ProcessedContent): Summary to verify
+            
+        Returns:
+            str: Verification result (VERIFIED, PARTIAL, UNSUPPORTED, CONTRADICTED)
+        """
+        chain = self.prompt | self.llm
+        
+        result = await chain.ainvoke({
+            "claim": summary.summary,
+            "source_content": summary.source.content[:1000]  # Limit content length
+        })
+        
+        verification = result.content if hasattr(result, 'content') else str(result)
+        return verification
 

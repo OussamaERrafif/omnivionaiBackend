@@ -94,56 +94,87 @@ Provide your summary now (2-3 sentences, factual and relevant):"""
 
     async def process(self, sources: List[SourceMetadata], topic: str) -> List[ProcessedContent]:
         """
-        Summarize multiple sources while preserving all citation metadata.
+        Summarize multiple sources with batched LLM calls for improved performance.
         
-        Processes each source to create a concise summary that captures key information
-        relevant to the research topic. Each summary is wrapped in ProcessedContent with
-        the full source metadata for citation tracking.
+        Processes sources in batches to reduce API call overhead and improve parallelism.
+        Each batch is processed concurrently, then results are collected and returned.
         
         Args:
             sources (List[SourceMetadata]): List of sources to summarize
             topic (str): The research topic for context and relevance filtering
             
         Returns:
-            List[ProcessedContent]: List of summaries with preserved source metadata.
-                                   Each entry contains the summary text and full citation info.
-                                   
-        Note:
-            - Skips sources with empty content
-            - Applies rate limiting (Config.RATE_LIMIT_DELAY) between API calls
-            - Continues processing on individual failures rather than stopping
-            - Preserves source relevance_score as confidence_score
+            List[ProcessedContent]: List of summaries with preserved source metadata
         """
+        if not sources:
+            return []
+            
         summaries = []
-
-        for source in sources:
-            if not source.content:
-                continue
-
-            chain = self.prompt | self.llm
-
+        batch_size = Config.SUMMARIZATION_BATCH_SIZE  # Process sources concurrently for optimal performance
+        
+        # Filter out sources with empty content
+        valid_sources = [source for source in sources if source.content]
+        
+        if not valid_sources:
+            return []
+        
+        print(f"   📝 Processing {len(valid_sources)} sources in batches of {Config.SUMMARIZATION_BATCH_SIZE}")
+        
+        # Process sources in batches
+        for i in range(0, len(valid_sources), batch_size):
+            batch = valid_sources[i:i + batch_size]
+            print(f"   🔄 Processing batch {i//batch_size + 1}/{(len(valid_sources) + batch_size - 1)//batch_size}")
+            
+            # Create tasks for this batch
+            tasks = []
+            for source in batch:
+                task = self._summarize_single_source(source, topic)
+                tasks.append(task)
+            
+            # Execute batch concurrently
             try:
-                result = await chain.ainvoke({
-                    "section": source.section,
-                    "content": source.content,
-                    "topic": topic
-                })
-
-                # Extract content from the response
-                summary = result.content if hasattr(result, 'content') else str(result)
-
-                summaries.append(ProcessedContent(
-                    summary=summary.strip(),
-                    source=source,
-                    confidence_score=source.relevance_score
-                ))
-
-                # Rate limiting
-                await asyncio.sleep(Config.RATE_LIMIT_DELAY)
-
+                batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # Process results
+                for j, result in enumerate(batch_results):
+                    source = batch[j]
+                    if isinstance(result, Exception):
+                        print(f"   ❌ Summarization failed for source {source.url}: {result}")
+                        continue
+                    
+                    summaries.append(ProcessedContent(
+                        summary=result.strip(),
+                        source=source,
+                        confidence_score=source.relevance_score
+                    ))
+                    
             except Exception as e:
-                print(f"Summarization error: {e}")
+                print(f"   ❌ Batch processing error: {e}")
                 continue
-
+        
+        print(f"   ✅ Completed summarization: {len(summaries)}/{len(valid_sources)} sources processed")
         return summaries
+    
+    async def _summarize_single_source(self, source: SourceMetadata, topic: str) -> str:
+        """
+        Summarize a single source using LLM.
+        
+        Args:
+            source (SourceMetadata): Source to summarize
+            topic (str): Research topic for context
+            
+        Returns:
+            str: Summary text
+        """
+        chain = self.prompt | self.llm
+        
+        result = await chain.ainvoke({
+            "section": source.section,
+            "content": source.content,
+            "topic": topic
+        })
+        
+        # Extract content from the response
+        summary = result.content if hasattr(result, 'content') else str(result)
+        return summary
 

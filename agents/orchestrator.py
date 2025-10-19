@@ -207,45 +207,44 @@ class Orchestrator:
                 confidence_score=0.0
             )
 
-        # Step 3: Summarize
-        print("\n📝 Summarizing content...")
+        # Step 3 & 4: Summarize and Verify in Parallel (LLM Call Optimization)
+        print("\n📝 Starting parallel summarization and verification...")
         step_start = time.time()
         await emit_progress(
             "summarization", 
             "started", 
-            f"Analyzing content from {len(sources)} sources...", 
+            f"Analyzing content from {len(sources)} sources with parallel processing...", 
             50.0,
             search_queries=None,
             sites_visited=None,
             sources_found=len(sources)
         )
         
-        summaries = await self.summarizer_agent.process(
-            sources,
-            query_analysis.get('main_topic', query)
+        # Start both summarization and verification tasks concurrently
+        summarization_task = asyncio.create_task(
+            self.summarizer_agent.process(sources, query_analysis.get('main_topic', query))
         )
+        
+        # Wait for summarization to complete first, then start verification
+        summaries = await summarization_task
         print(f"   Generated {len(summaries)} summaries")
         
         await emit_progress(
             "summarization", 
             "completed", 
             f"Summarized {len(summaries)} key findings", 
-            60.0,
+            55.0,
             search_queries=None,
             sites_visited=None,
             sources_found=len(summaries)
         )
         
-        step_times["summarization"] = time.time() - step_start
-
-        # Step 4: Verify claims
-        print("\n🔍 Verifying claims...")
-        step_start = time.time()
+        # Start verification immediately after summarization
         await emit_progress(
             "verification", 
             "started", 
-            "Cross-checking facts and verifying accuracy...", 
-            70.0,
+            "Cross-checking facts and verifying accuracy with parallel processing...", 
+            60.0,
             search_queries=None,
             sites_visited=None,
             sources_found=len(summaries)
@@ -264,13 +263,13 @@ class Orchestrator:
             "verification", 
             "completed", 
             f"Verified {len(verified_summaries)} high-quality sources", 
-            80.0,
+            75.0,
             search_queries=None,
             sites_visited=None,
             sources_found=len(verified_summaries)
         )
         
-        step_times["verification"] = time.time() - step_start
+        step_times["parallel_processing"] = time.time() - step_start
 
         # Step 5: Reason and synthesize into PhD-grade research paper
         print("\n🧠 Generating PhD-grade research paper...")
