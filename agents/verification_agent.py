@@ -169,6 +169,9 @@ Analyze the claim against the source and respond with your single-word verdict n
                     # Only include if confidence is above threshold
                     if summary.confidence_score > 0.05:
                         verified_summaries.append(summary)
+                
+                # Add small delay between batches to prevent overwhelming API
+                await asyncio.sleep(0.5)
                         
             except Exception as e:
                 print(f"   ❌ Batch verification error: {e}")
@@ -201,6 +204,15 @@ Analyze the claim against the source and respond with your single-word verdict n
         Returns:
             str: Verification result (VERIFIED, PARTIAL, UNSUPPORTED, CONTRADICTED)
         """
+        # Create a unique prompt for caching
+        prompt_text = f"Verify this claim against the source content:\n\nCLAIM: {summary.summary}\n\nSOURCE CONTENT: {summary.source.content[:1000]}"
+        
+        # Check cache first
+        cached_result = self._get_cached_response(prompt_text)
+        if cached_result:
+            print(f"   📋 Using cached verification for claim")
+            return cached_result
+        
         chain = self.prompt | self.llm
         
         result = await chain.ainvoke({
@@ -209,5 +221,9 @@ Analyze the claim against the source and respond with your single-word verdict n
         })
         
         verification = result.content if hasattr(result, 'content') else str(result)
+        
+        # Cache the result
+        self._cache_response(prompt_text, verification)
+        
         return verification
 

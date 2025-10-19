@@ -147,6 +147,9 @@ Provide your summary now (2-3 sentences, factual and relevant):"""
                         source=source,
                         confidence_score=source.relevance_score
                     ))
+                
+                # Add small delay between batches to prevent overwhelming API
+                await asyncio.sleep(0.5)
                     
             except Exception as e:
                 print(f"   ❌ Batch processing error: {e}")
@@ -166,6 +169,15 @@ Provide your summary now (2-3 sentences, factual and relevant):"""
         Returns:
             str: Summary text
         """
+        # Create a unique prompt for caching
+        prompt_text = f"Summarize this content for topic '{topic}':\n\nSection: {source.section}\n\nContent: {source.content}"
+        
+        # Check cache first
+        cached_result = self._get_cached_response(prompt_text)
+        if cached_result:
+            print(f"   📋 Using cached summary for source {source.url}")
+            return cached_result
+        
         chain = self.prompt | self.llm
         
         result = await chain.ainvoke({
@@ -176,5 +188,9 @@ Provide your summary now (2-3 sentences, factual and relevant):"""
         
         # Extract content from the response
         summary = result.content if hasattr(result, 'content') else str(result)
+        
+        # Cache the result
+        self._cache_response(prompt_text, summary)
+        
         return summary
 

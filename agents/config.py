@@ -63,9 +63,9 @@ class Config:
     """bool: Whether to enable multi-round iterative research for deeper analysis"""
     
     # LLM Batch Processing Configuration
-    SUMMARIZATION_BATCH_SIZE = 3         # Number of sources to summarize concurrently
+    SUMMARIZATION_BATCH_SIZE = 2         # Reduced from 3 for stability
     """int: Number of sources to process in parallel during summarization"""
     
-    VERIFICATION_BATCH_SIZE = 4          # Number of claims to verify concurrently
+    VERIFICATION_BATCH_SIZE = 2          # Reduced from 4 for stability
     """int: Number of claims to process in parallel during verification"""
 

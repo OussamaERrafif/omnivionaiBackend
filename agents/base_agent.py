@@ -2,7 +2,8 @@
 Base Agent Class for Academic Research Paper Generator
 """
 
-from typing import Optional
+from typing import Optional, Dict
+import hashlib
 # Google API imports (commented out - replaced with OpenAI)
 # from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
@@ -22,6 +23,7 @@ class BaseAgent:
     Attributes:
         name (str): The name identifier for this agent
         llm (ChatOpenAI): The language model instance used by this agent
+        _llm_cache (Dict[str, str]): Simple in-memory cache for LLM responses
     """
 
     def __init__(self, name: str, llm: Optional[ChatOpenAI] = None):
@@ -36,6 +38,7 @@ class BaseAgent:
         # def __init__(self, name: str, llm: Optional[ChatGoogleGenerativeAI] = None):  # Old Google API
         self.name = name
         self.llm = llm or self._create_llm()
+        self._llm_cache: Dict[str, str] = {}  # Simple in-memory cache for LLM responses
 
     def _create_llm(self):
         """
@@ -70,6 +73,42 @@ class BaseAgent:
             streaming=True,
             callbacks=[StreamingStdOutCallbackHandler()]
         )
+
+    def _get_cache_key(self, prompt: str) -> str:
+        """
+        Generate a cache key for the given prompt.
+        
+        Args:
+            prompt (str): The prompt to generate a key for
+            
+        Returns:
+            str: MD5 hash of the prompt as cache key
+        """
+        return hashlib.md5(prompt.encode('utf-8')).hexdigest()
+
+    def _get_cached_response(self, prompt: str) -> Optional[str]:
+        """
+        Get a cached LLM response for the given prompt.
+        
+        Args:
+            prompt (str): The prompt to check cache for
+            
+        Returns:
+            Optional[str]: Cached response if available, None otherwise
+        """
+        cache_key = self._get_cache_key(prompt)
+        return self._llm_cache.get(cache_key)
+
+    def _cache_response(self, prompt: str, response: str) -> None:
+        """
+        Cache an LLM response for the given prompt.
+        
+        Args:
+            prompt (str): The prompt that generated the response
+            response (str): The response to cache
+        """
+        cache_key = self._get_cache_key(prompt)
+        self._llm_cache[cache_key] = response
 
     async def process(self, *args, **kwargs):
         """
