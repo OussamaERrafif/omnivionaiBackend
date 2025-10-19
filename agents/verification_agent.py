@@ -171,7 +171,7 @@ Analyze the claim against the source and respond with your single-word verdict n
                         verified_summaries.append(summary)
                 
                 # Add small delay between batches to prevent overwhelming API
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.1)
                         
             except Exception as e:
                 print(f"   ❌ Batch verification error: {e}")

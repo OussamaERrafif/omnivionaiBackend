@@ -284,7 +284,11 @@ class Orchestrator:
             sources_found=len(verified_summaries)
         )
         
-        answer = await self.reasoning_agent.process(query, verified_summaries)
+        # Limit summaries to top 5 for faster processing while maintaining quality
+        top_summaries = sorted(verified_summaries, key=lambda x: x.confidence_score, reverse=True)[:5]
+        print(f"   Using top {len(top_summaries)} summaries for synthesis (out of {len(verified_summaries)})")
+        
+        answer = await self.reasoning_agent.process(query, top_summaries)
         
         await emit_progress(
             "synthesis", 

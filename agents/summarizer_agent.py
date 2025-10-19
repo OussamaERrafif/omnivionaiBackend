@@ -149,7 +149,7 @@ Provide your summary now (2-3 sentences, factual and relevant):"""
                     ))
                 
                 # Add small delay between batches to prevent overwhelming API
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.1)
                     
             except Exception as e:
                 print(f"   ❌ Batch processing error: {e}")

@@ -32,7 +32,7 @@ class Config:
     MAX_RESULTS_PER_SEARCH = 2  # Increased for more comprehensive search
     """int: Maximum number of search results to retrieve per search query"""
     
-    MAX_CONTENT_LENGTH = 2000  # Increased for better content extraction
+    MAX_CONTENT_LENGTH = 1500  # Reduced for faster processing
     """int: Maximum character length for extracted content from web pages"""
     
     REQUEST_TIMEOUT = 10  # Increased timeout for better content extraction
@@ -52,7 +52,7 @@ class Config:
     MAX_SOURCES_PER_DOMAIN_FINAL = 5    # Allow more sources per domain in final result
     """int: Maximum sources allowed from same domain in final aggregated results"""
     
-    MAX_TOTAL_SOURCES = 8               # Maximum total sources to analyze (reduced for performance)
+    MAX_TOTAL_SOURCES = 6               # Reduced for faster processing
     """int: Maximum total number of sources to analyze across all searches"""
     
     # Iterative research settings
@@ -63,9 +63,9 @@ class Config:
     """bool: Whether to enable multi-round iterative research for deeper analysis"""
     
     # LLM Batch Processing Configuration
-    SUMMARIZATION_BATCH_SIZE = 2         # Reduced from 3 for stability
+    SUMMARIZATION_BATCH_SIZE = 4         # Increased from 2 for better performance
     """int: Number of sources to process in parallel during summarization"""
     
-    VERIFICATION_BATCH_SIZE = 2          # Reduced from 4 for stability
+    VERIFICATION_BATCH_SIZE = 6          # Increased from 2 for better performance
     """int: Number of claims to process in parallel during verification"""
 
