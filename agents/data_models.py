@@ -75,10 +75,10 @@ class FinalAnswer:
         answer (str): The synthesized answer to the research query
         citations (List[SourceMetadata]): All sources cited in the answer
         confidence_score (float): Overall confidence score (0.0-1.0) for the answer
-        markdown_content (str): Formatted markdown version of the complete research paper
+        # markdown_content (str): Formatted markdown version of the complete research paper - COMMENTED OUT FOR PERFORMANCE
     """
     answer: str
     citations: List[SourceMetadata]
     confidence_score: float = 0.0
-    markdown_content: str = ""
+    # markdown_content: str = ""  # COMMENTED OUT FOR PERFORMANCE
 

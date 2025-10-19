@@ -48,6 +48,16 @@ class ResearchAgent(BaseAgent):
         """Initialize the research agent with search capabilities."""
         super().__init__("Research")
         self.search_wrapper = DuckDuckGoSearchAPIWrapper()
+        # Create a session with connection pooling for better performance
+        self.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=20,
+            max_retries=3,
+            pool_block=False
+        )
+        self.session.mount('http://', adapter)
+        self.session.mount('https://', adapter)
 
     def _calculate_advanced_relevance_score(self, content: str, keywords: List[str], section_name: str, title: str, url: str) -> float:
         """
@@ -221,7 +231,7 @@ class ResearchAgent(BaseAgent):
         sections = []
 
         try:
-            response = requests.get(url, timeout=Config.REQUEST_TIMEOUT)
+            response = self.session.get(url, timeout=Config.REQUEST_TIMEOUT)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -476,7 +486,7 @@ Example format: ["machine learning agent", "autonomous software", "AI system arc
                 remaining_slots -= 1
 
         # Third pass: Ensure minimum sources (relaxed domain limits if needed)
-        MIN_SOURCES = 15
+        MIN_SOURCES = 8  # Reduced from 15 to 8 for better performance
         if len(final_sources) < MIN_SOURCES:
             print(f"   📊 Only {len(final_sources)} sources selected, adding more to reach minimum of {MIN_SOURCES}...")
             # Combine all remaining sources and sort by relevance

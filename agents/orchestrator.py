@@ -7,6 +7,7 @@ import json
 import math
 from datetime import datetime
 from typing import List
+import time
 
 from .query_analyzer_agent import QueryAnalyzerAgent
 from .query_validator_agent import QueryValidatorAgent
@@ -80,6 +81,9 @@ class Orchestrator:
 
         print(f"\n🔍 Processing query: {query}\n")
         print("=" * 50)
+        
+        start_time = time.time()
+        step_times = {}
 
         # Helper function to emit progress
         async def emit_progress(step: str, status: str, details: str, progress: float, search_queries: List[str] = None, sites_visited: List[str] = None, sources_found: int = None):
@@ -88,6 +92,7 @@ class Orchestrator:
 
         # Step 0: Validate query
         print("\n✅ Validating query...")
+        step_start = time.time()
         await emit_progress("validation", "started", "Validating your query...", 5.0)
         
         validation_result = await self.query_validator.validate(query)
@@ -106,10 +111,12 @@ class Orchestrator:
             raise ValueError(f"{error_message}. {suggestion if suggestion else 'Please try a different query.'}")
         
         print(f"   ✓ Query is valid")
+        step_times["validation"] = time.time() - step_start
         await emit_progress("validation", "completed", "Query validated successfully", 10.0)
 
         # Step 1: Analyze query with web search context
         print("\n📊 Analyzing query with web search...")
+        step_start = time.time()
         await emit_progress("query_analysis", "started", "Searching the web and analyzing your query...", 15.0)
         
         # The query analyzer now performs web search first, then generates search terms based on results
@@ -133,10 +140,13 @@ class Orchestrator:
                 )
         else:
             await emit_progress("query_analysis", "completed", "Query analyzed", 25.0)
+        
+        step_times["query_analysis"] = time.time() - step_start
 
         # Step 2: Research (Iterative or Standard)
         if Config.ENABLE_ITERATIVE_RESEARCH:
             print("\n🔬 Starting iterative research...")
+            step_start = time.time()
             await emit_progress("research", "started", "Gathering sources from the web...", 30.0)
             
             sources = await self.research_agent.process_iterative(
@@ -161,8 +171,11 @@ class Orchestrator:
                 )
             else:
                 await emit_progress("research", "completed", "Research completed", 40.0)
+            
+            step_times["research"] = time.time() - step_start
         else:
             print("\n🔬 Researching sources...")
+            step_start = time.time()
             await emit_progress("research", "started", "Researching sources...", 30.0)
             
             sources = await self.research_agent.process(query_analysis)
@@ -183,6 +196,8 @@ class Orchestrator:
                 )
             else:
                 await emit_progress("research", "completed", "Research completed", 40.0)
+            
+            step_times["research"] = time.time() - step_start
 
         if not sources:
             await emit_progress("research", "completed", "No sources found", 100.0)
@@ -194,6 +209,7 @@ class Orchestrator:
 
         # Step 3: Summarize
         print("\n📝 Summarizing content...")
+        step_start = time.time()
         await emit_progress(
             "summarization", 
             "started", 
@@ -219,9 +235,12 @@ class Orchestrator:
             sites_visited=None,
             sources_found=len(summaries)
         )
+        
+        step_times["summarization"] = time.time() - step_start
 
         # Step 4: Verify claims
         print("\n🔍 Verifying claims...")
+        step_start = time.time()
         await emit_progress(
             "verification", 
             "started", 
@@ -250,9 +269,12 @@ class Orchestrator:
             sites_visited=None,
             sources_found=len(verified_summaries)
         )
+        
+        step_times["verification"] = time.time() - step_start
 
         # Step 5: Reason and synthesize into PhD-grade research paper
         print("\n🧠 Generating PhD-grade research paper...")
+        step_start = time.time()
         await emit_progress(
             "synthesis", 
             "started", 
@@ -274,9 +296,12 @@ class Orchestrator:
             sites_visited=None,
             sources_found=len(verified_summaries)
         )
+        
+        step_times["synthesis"] = time.time() - step_start
 
         # Step 6: Format citations and sources
         print("\n📚 Formatting citations...")
+        step_start = time.time()
         await emit_progress(
             "formatting", 
             "started", 
@@ -325,6 +350,17 @@ class Orchestrator:
 
         print("\n✅ Search complete!")
         print("=" * 50)
+        
+        step_times["formatting"] = time.time() - step_start
+        
+        # Performance summary
+        total_time = time.time() - start_time
+        print(f"\n⏱️  Performance Summary:")
+        print(f"   Total time: {total_time:.2f}s")
+        for step, duration in step_times.items():
+            percentage = (duration / total_time) * 100
+            print(f"   {step}: {duration:.2f}s ({percentage:.1f}%)")
+        print(f"   Processed {len(verified_summaries)} sources")
 
         # Create final answer
         final_answer = FinalAnswer(
@@ -333,16 +369,16 @@ class Orchestrator:
             confidence_score=avg_confidence
         )
 
-        # Generate markdown research paper
-        markdown_paper = self.citer_agent.create_markdown_research_paper(
-            query, answer, verified_summaries, avg_confidence
-        )
+        # Generate markdown research paper - COMMENTED OUT FOR PERFORMANCE
+        # markdown_paper = self.citer_agent.create_markdown_research_paper(
+        #     query, answer, verified_summaries, avg_confidence
+        # )
 
-        # Print results in research paper format
-        print(f"\n" + "=" * 80)
-        print(f"RESEARCH PAPER: {query}")
-        print("=" * 80)
-        print(markdown_paper)
+        # Print results in research paper format - COMMENTED OUT FOR PERFORMANCE
+        # print(f"\n" + "=" * 80)
+        # print(f"RESEARCH PAPER: {query}")
+        # print("=" * 80)
+        # print(markdown_paper)
 
         # Save markdown file automatically - COMMENTED OUT
         # filename = f"research_paper_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
@@ -353,8 +389,8 @@ class Orchestrator:
         # except Exception as e:
         #     print(f"\n⚠️  Could not save markdown file: {e}")
 
-        # Store markdown in final answer for potential API use
-        final_answer.markdown_content = markdown_paper
+        # Store markdown in final answer for potential API use - COMMENTED OUT FOR PERFORMANCE
+        # final_answer.markdown_content = markdown_paper
 
         await emit_progress(
             "completion", 

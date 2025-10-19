@@ -52,7 +52,7 @@ class Config:
     MAX_SOURCES_PER_DOMAIN_FINAL = 5    # Allow more sources per domain in final result
     """int: Maximum sources allowed from same domain in final aggregated results"""
     
-    MAX_TOTAL_SOURCES = 2               # Maximum total sources to analyze (threshold)
+    MAX_TOTAL_SOURCES = 8               # Maximum total sources to analyze (reduced for performance)
     """int: Maximum total number of sources to analyze across all searches"""
     
     # Iterative research settings

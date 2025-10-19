@@ -28,6 +28,7 @@ import uvicorn
 import json
 from datetime import datetime
 import uuid
+import dataclasses
 
 # Import the existing search functionality
 from aideepseatch import Orchestrator
@@ -85,12 +86,12 @@ class SearchResponse(BaseModel):
         answer (str): Synthesized answer to the query
         citations (List[CitationModel]): All sources cited in the answer
         confidence_score (float): Overall confidence in the answer (0.0-1.0)
-        markdown_content (str): Full research paper in markdown format
+        # markdown_content (str): Full research paper in markdown format - COMMENTED OUT FOR PERFORMANCE
     """
     answer: str
     citations: List[CitationModel]
     confidence_score: float
-    markdown_content: str
+    # markdown_content: str  # COMMENTED OUT FOR PERFORMANCE
 
 class ProgressUpdate(BaseModel):
     """
@@ -281,30 +282,15 @@ async def search_research_paper(
         )
         print(f"📊 Search count updated: {increment_result.get('searches_used', 0)} used, {increment_result.get('searches_remaining', 0)} remaining")
 
-        # Convert citations to dict format for JSON response
-        citations_data = []
-        for citation in result.citations:
-            citations_data.append({
-                "url": citation.url,
-                "title": citation.title,
-                "section": citation.section,
-                "paragraph_id": citation.paragraph_id,
-                "content": citation.content,
-                "relevance_score": citation.relevance_score,
-                "timestamp": citation.timestamp,
-                "trust_flag": citation.trust_flag,
-                "trust_score": citation.trust_score,
-                "is_trusted": citation.is_trusted,
-                "trust_category": citation.trust_category,
-                "domain": citation.domain
-            })
+        # Convert citations to dict format for JSON response (optimized)
+        citations_data = [dataclasses.asdict(citation) for citation in result.citations]
 
         # Create response with quota information
         response_data = SearchResponse(
             answer=result.answer,
             citations=citations_data,
-            confidence_score=result.confidence_score,
-            markdown_content=result.markdown_content
+            confidence_score=result.confidence_score
+            # markdown_content=result.markdown_content  # COMMENTED OUT FOR PERFORMANCE
         )
         
         # Return response with quota headers
@@ -453,30 +439,15 @@ async def search_research_paper_get(
             )
             print(f"📊 Search count updated: {increment_result.get('searches_used', 0)} used, {increment_result.get('searches_remaining', 0)} remaining")
 
-            # Convert citations to dict format for JSON response
-            citations_data = []
-            for citation in result.citations:
-                citations_data.append({
-                    "url": citation.url,
-                    "title": citation.title,
-                    "section": citation.section,
-                    "paragraph_id": citation.paragraph_id,
-                    "content": citation.content,
-                    "relevance_score": citation.relevance_score,
-                    "timestamp": citation.timestamp,
-                    "trust_flag": citation.trust_flag,
-                    "trust_score": citation.trust_score,
-                    "is_trusted": citation.is_trusted,
-                    "trust_category": citation.trust_category,
-                    "domain": citation.domain
-                })
+            # Convert citations to dict format for JSON response (optimized)
+            citations_data = [dataclasses.asdict(citation) for citation in result.citations]
 
             # Send final result
             final_response = SearchResponse(
                 answer=result.answer,
                 citations=citations_data,
-                confidence_score=result.confidence_score,
-                markdown_content=result.markdown_content
+                confidence_score=result.confidence_score
+                # markdown_content=result.markdown_content  # COMMENTED OUT FOR PERFORMANCE
             )
             
             response = StreamingSearchResponse(
@@ -552,29 +523,14 @@ async def search_research_paper_sync(query: str):
         # Execute the search without progress callback (original behavior)
         result: FinalAnswer = await orchestrator.search(query.strip())
 
-        # Convert citations to dict format for JSON response
-        citations_data = []
-        for citation in result.citations:
-            citations_data.append({
-                "url": citation.url,
-                "title": citation.title,
-                "section": citation.section,
-                "paragraph_id": citation.paragraph_id,
-                "content": citation.content,
-                "relevance_score": citation.relevance_score,
-                "timestamp": citation.timestamp,
-                "trust_flag": citation.trust_flag,
-                "trust_score": citation.trust_score,
-                "is_trusted": citation.is_trusted,
-                "trust_category": citation.trust_category,
-                "domain": citation.domain
-            })
+        # Convert citations to dict format for JSON response (optimized)
+        citations_data = [dataclasses.asdict(citation) for citation in result.citations]
 
         return SearchResponse(
             answer=result.answer,
             citations=citations_data,
-            confidence_score=result.confidence_score,
-            markdown_content=result.markdown_content
+            confidence_score=result.confidence_score
+            # markdown_content=result.markdown_content  # COMMENTED OUT FOR PERFORMANCE
         )
 
     except ValueError as e:
