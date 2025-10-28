@@ -36,8 +36,12 @@ from agents.data_models import FinalAnswer, SourceMetadata
 
 # Import subscription middleware
 from subscription_middleware import check_user_quota, increment_user_search, get_quota_headers
-from lemonsqueezy import create_checkout, verify_webhook_signature
-from subscription_middleware import supabase as backend_supabase
+
+# Import history service
+from history_service import save_search_history, get_search_history, delete_search_history_item, clear_all_history
+
+# Import auth utilities
+from auth_utils import extract_user_from_token, get_optional_user_from_token
 
 # Pydantic models for request/response
 class SearchRequest(BaseModel):
@@ -182,6 +186,99 @@ async def health_check():
         Dict: Health status
     """
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
+
+# ==================== HISTORY ENDPOINTS (Backend Authoritative) ====================
+
+@app.get("/history")
+async def get_history(
+    authorization: Optional[str] = Header(None),
+    limit: int = 20,
+    offset: int = 0
+):
+    """
+    Get search history for the authenticated user.
+    
+    **Backend Authoritative**: Only backend can write history.
+    Frontend reads history via this endpoint only.
+    
+    Args:
+        authorization: Bearer token for authentication
+        limit: Number of results to return (max 100)
+        offset: Pagination offset
+        
+    Returns:
+        Dict containing paginated history
+        
+    Raises:
+        HTTPException 401: If user is not authenticated
+    """
+    # Extract and validate user from JWT
+    user_id = await extract_user_from_token(authorization)
+    
+    # Limit validation
+    limit = min(limit, 100)
+    
+    # Get history from backend service
+    history_data = await get_search_history(user_id, limit, offset)
+    
+    return JSONResponse(content=history_data)
+
+
+@app.delete("/history/{search_id}")
+async def delete_history(
+    search_id: str,
+    authorization: Optional[str] = Header(None)
+):
+    """
+    Delete a specific search history item.
+    
+    **Backend Authoritative**: Only backend can delete history.
+    
+    Args:
+        search_id: ID of search to delete
+        authorization: Bearer token for authentication
+        
+    Returns:
+        Dict with deletion status
+        
+    Raises:
+        HTTPException 401: If user is not authenticated
+    """
+    # Extract and validate user from JWT
+    user_id = await extract_user_from_token(authorization)
+    
+    # Delete history item
+    result = await delete_search_history_item(user_id, search_id)
+    
+    return JSONResponse(content=result)
+
+
+@app.delete("/history")
+async def clear_history(
+    authorization: Optional[str] = Header(None)
+):
+    """
+    Clear all search history for the authenticated user.
+    
+    **Backend Authoritative**: Only backend can clear history.
+    
+    Args:
+        authorization: Bearer token for authentication
+        
+    Returns:
+        Dict with clear status
+        
+    Raises:
+        HTTPException 401: If user is not authenticated
+    """
+    # Extract and validate user from JWT
+    user_id = await extract_user_from_token(authorization)
+    
+    # Clear all history
+    result = await clear_all_history(user_id)
+    
+    return JSONResponse(content=result)
 
 @app.get("/test-search/{query}")
 async def test_search(query: str):
@@ -548,114 +645,4 @@ if __name__ == "__main__":
         port=8000,
         reload=True
     )
-
-
-@app.post("/lemonsqueezy/checkout")
-async def lemonsqueezy_checkout(authorization: Optional[str] = Header(None), body: Dict[str, Any] = None):
-    """Create a LemonSqueezy checkout session (proxied via backend helpers).
-
-    Expects JSON body: { "planType": "pro", "returnUrl": "https://..." }
-
-    If the backend has LEMONSQUEEZY_HELPER_URL or LEMONSQUEEZY_API_KEY configured
-    the helper will create a checkout and return JSON containing a checkout URL.
-    """
-    try:
-        data = body or {}
-        plan_type = data.get("planType") or data.get("plan_type")
-        return_url = data.get("returnUrl") or data.get("return_url")
-
-        if not plan_type:
-            raise HTTPException(status_code=400, detail="Missing 'planType' in request body")
-
-        # Try to extract user id from the Authorization header (if present)
-        user_id = None
-        if authorization and authorization.startswith("Bearer ") and backend_supabase:
-            token = authorization.split(" ", 1)[1]
-            try:
-                user_resp = backend_supabase.auth.get_user(token)
-                if hasattr(user_resp, 'user') and user_resp.user:
-                    user_id = user_resp.user.id
-            except Exception:
-                # Not fatal — proceed without user_id
-                user_id = None
-
-        # Forward the auth header if present to helper (some helper implementations may need it)
-        forward_auth = authorization if authorization else None
-
-        result = create_checkout(plan_type=plan_type, user_id=user_id, return_url=return_url, forward_auth=forward_auth)
-
-        return result
-    except HTTPException:
-        raise
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        print(f"❌ Error creating LemonSqueezy checkout: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create checkout")
-
-
-@app.post("/lemonsqueezy/webhook")
-async def lemonsqueezy_webhook(request: Any):
-    """Receive LemonSqueezy webhook events and reconcile subscriptions in Supabase.
-
-    Expected behavior:
-    - Verify HMAC signature if LEMONSQUEEZY_WEBHOOK_SECRET is configured.
-    - Parse JSON payload. If event contains metadata.user_id, upsert `user_subscriptions` row
-      using the service role Supabase client.
-    - Return 200 OK quickly.
-    """
-    try:
-        raw_body = await request.body()
-        headers = request.headers
-        signature = headers.get('x-lemonsqueezy-signature') or headers.get('X-LemonSqueezy-Signature')
-
-        ok = verify_webhook_signature(raw_body, signature)
-        if not ok:
-            # If verification failed, return 400 to indicate invalid webhook
-            print("⚠️ Webhook signature verification failed")
-            raise HTTPException(status_code=400, detail="Invalid webhook signature")
-
-        payload = json.loads(raw_body.decode('utf-8')) if raw_body else {}
-        # The webhooks typically wrap event data; be tolerant to structure
-        event = payload.get('data') or payload
-
-        # Attempt to extract metadata and useful subscription details
-        metadata = None
-        # Many LemonSqueezy events include relationships and attributes. Try common keys.
-        if isinstance(event, dict):
-            metadata = event.get('metadata') or event.get('attributes', {}).get('metadata')
-
-        # If metadata contains user_id, update user_subscriptions table
-        if metadata and isinstance(metadata, dict) and metadata.get('user_id'):
-            user_id = metadata.get('user_id')
-            plan_type = metadata.get('plan_type') or event.get('attributes', {}).get('plan_type') or 'pro'
-            # Build subscription row data — minimal fields: user_id, plan_type, status, raw_event
-            status = event.get('attributes', {}).get('status') or 'active'
-            next_reset = None
-
-            # Upsert into user_subscriptions using service role Supabase client
-            if backend_supabase:
-                try:
-                    record = {
-                        'user_id': user_id,
-                        'plan_type': plan_type,
-                        'status': status,
-                        'raw_event': json.dumps(event),
-                    }
-                    # Use upsert to insert or update by user_id
-                    resp = backend_supabase.table('user_subscriptions').upsert(record, on_conflict=['user_id']).execute()
-                    print('✅ Supabase upsert result:', getattr(resp, 'data', None))
-                except Exception as e:
-                    print('❌ Failed to upsert subscription to Supabase:', str(e))
-            else:
-                print('⚠️ Supabase service client not configured; cannot persist subscription')
-
-        # Respond quickly
-        return JSONResponse(content={'received': True})
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        print('❌ Unexpected error in webhook handler:', str(e))
-        raise HTTPException(status_code=500, detail='Webhook processing failed')
 
