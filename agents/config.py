@@ -61,4 +61,20 @@ class Config:
     
     ENABLE_ITERATIVE_RESEARCH = True     # Enable/disable iterative research
     """bool: Whether to enable multi-round iterative research for deeper analysis"""
+    
+    # Quality filtering settings
+    MIN_RELEVANCE_SCORE = 0.25          # Minimum relevance score to include a source
+    """float: Minimum relevance score (0.0-1.0) required to include a source in results"""
+    
+    # Blacklisted domains (low-quality sources to exclude)
+    BLACKLISTED_DOMAINS = {
+        'merriam-webster.com',
+        'dictionary.com',
+        'thesaurus.com',
+        'vocabulary.com',
+        'yourdictionary.com',
+        'collinsdictionary.com',
+        'macmillandictionary.com',
+    }
+    """set: Domain names to exclude from search results (dictionaries, spam sites, etc.)"""
 

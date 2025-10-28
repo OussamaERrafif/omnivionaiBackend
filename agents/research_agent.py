@@ -147,6 +147,23 @@ class ResearchAgent(BaseAgent):
             structure_bonus += 0.05
         if any(indicator in content_lower for indicator in ['however', 'therefore', 'furthermore']):
             structure_bonus += 0.03  # Analytical language
+        
+        # 5.5. Dictionary/definition detection (penalize dictionary-like content)
+        dictionary_indicators = [
+            'plural of', 'present tense', 'past tense', 'third-person singular',
+            'see definitions', 'word of the day', 'thesaurus:', 'synonyms and antonyms',
+            'merriam-webster.com dictionary', 'noun:', 'verb:', 'adjective:', 'adverb:',
+            'etymology:', 'pronunciation:', 'definition:', 'meaning:'
+        ]
+        dictionary_penalty = 0.0
+        dictionary_matches = sum(1 for indicator in dictionary_indicators if indicator in content_lower)
+        if dictionary_matches >= 3:
+            # Strong dictionary signature - heavily penalize
+            dictionary_penalty = -0.6
+            print(f"   🚫 Dictionary content detected ({dictionary_matches} indicators) - applying penalty")
+        elif dictionary_matches >= 1:
+            # Mild dictionary signature - moderate penalty
+            dictionary_penalty = -0.3
 
         # 6. TRUST MULTIPLIER - Apply trust scoring to boost trusted sources
         trust_info = TrustedDomains.get_domain_trust_info(url)
@@ -158,8 +175,8 @@ class ResearchAgent(BaseAgent):
             trust_multiplier = 1.0 + (trust_score_normalized * 0.5)  # 1.375 to 1.475 multiplier
             print(f"   ✅ TRUSTED SOURCE: {trust_info['domain']} ({trust_info['category']}) - Trust boost: {trust_multiplier:.2f}x")
 
-        # Combine all factors with trust multiplier
-        final_score = ((base_score * quality_multiplier) + title_section_bonus + diversity_bonus + structure_bonus) * trust_multiplier
+        # Combine all factors with trust multiplier and dictionary penalty
+        final_score = ((base_score * quality_multiplier) + title_section_bonus + diversity_bonus + structure_bonus + dictionary_penalty) * trust_multiplier
 
         # Ensure score stays within reasonable bounds
         return min(1.0, max(0.0, final_score))
@@ -393,6 +410,11 @@ Example format: ["machine learning agent", "autonomous software", "AI system arc
                     # Extract domain for bias prevention
                     from urllib.parse import urlparse
                     domain = urlparse(url).netloc.lower()
+                    
+                    # Skip blacklisted domains (dictionaries, spam sites, etc.)
+                    if any(blacklisted in domain for blacklisted in Config.BLACKLISTED_DOMAINS):
+                        print(f"   🚫 Skipping blacklisted domain: {domain}")
+                        continue
 
                     # Check trust status
                     is_trusted = TrustedDomains.is_trusted_domain(url)
@@ -450,9 +472,14 @@ Example format: ["machine learning agent", "autonomous software", "AI system arc
         domain_final_counts = {}
         trusted_counts = {}
 
+        # Filter out low-relevance sources before selection
+        print(f"   📊 Filtering sources with relevance >= {Config.MIN_RELEVANCE_SCORE}")
+        filtered_sources = [src for src in unique_sources if src.relevance_score >= Config.MIN_RELEVANCE_SCORE]
+        print(f"   ✅ Kept {len(filtered_sources)} of {len(unique_sources)} sources after relevance filtering")
+
         # Separate trusted and untrusted sources
-        trusted_sources = [src for src in unique_sources if src.is_trusted]
-        untrusted_sources = [src for src in unique_sources if not src.is_trusted]
+        trusted_sources = [src for src in filtered_sources if src.is_trusted]
+        untrusted_sources = [src for src in filtered_sources if not src.is_trusted]
 
         # Sort each group by relevance score
         trusted_sources.sort(key=lambda x: x.relevance_score, reverse=True)

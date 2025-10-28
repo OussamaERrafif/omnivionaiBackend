@@ -18,7 +18,7 @@ Main endpoints:
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
@@ -42,6 +42,32 @@ from history_service import save_search_history, get_search_history, delete_sear
 
 # Import auth utilities
 from auth_utils import extract_user_from_token, get_optional_user_from_token
+
+# Import new backend-authoritative services
+from search_service import search_service
+from quota_service import quota_service
+
+# Import security middleware
+from security_middleware import (
+    SecurityMiddleware,
+    require_auth,
+    optional_auth,
+    InputSanitizer,
+    webhook_idempotency,
+    security_logger
+)
+
+# Import performance optimizations
+from performance_optimization import (
+    init_redis_cache,
+    cleanup_redis_cache,
+    get_redis_cache,
+    perf_monitor,
+    hash_query,
+    normalize_query
+)
+import os
+import time
 
 # Pydantic models for request/response
 class SearchRequest(BaseModel):
@@ -144,6 +170,9 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Add Security Middleware (FIRST - before CORS)
+app.add_middleware(SecurityMiddleware)
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -156,6 +185,39 @@ app.add_middleware(
 # Global orchestrator instance
 orchestrator = Orchestrator()
 
+# ============================================================================
+# Application Lifecycle Events
+# ============================================================================
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize resources on startup."""
+    print("🚀 Starting Omnivionai API...")
+    
+    # Initialize Redis cache (optional)
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    try:
+        await init_redis_cache(redis_url)
+        print("✅ Redis cache initialized")
+    except Exception as e:
+        print(f"⚠️  Redis cache not available: {e}")
+        print("   System will run without caching (performance may be reduced)")
+    
+    print("✅ Omnivionai API ready!")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup resources on shutdown."""
+    print("🛑 Shutting down Omnivionai API...")
+    
+    await cleanup_redis_cache()
+    
+    print("✅ Cleanup complete")
+
+# ============================================================================
+# Main Endpoints
+# ============================================================================
+
 @app.get("/")
 @app.head("/")
 async def root():
@@ -165,14 +227,22 @@ async def root():
     Returns:
         Dict: API metadata including version and endpoint descriptions
     """
+    redis_status = "enabled" if get_redis_cache() and get_redis_cache().enabled else "disabled"
+    
     return {
         "message": "Omnivionai API",
         "version": "1.0.0",
+        "performance": {
+            "redis_cache": redis_status,
+            "async": "enabled",
+            "streaming": "enabled"
+        },
         "endpoints": {
             "/search": "POST - Execute research query (standard response)",
             "/search/{query}": "GET - Execute research query with real-time progress (Server-Sent Events)",
             "/search/sync/{query}": "GET - Execute research query without streaming (fallback)",
-            "/health": "GET - Health check"
+            "/health": "GET - Health check",
+            "/metrics": "GET - Performance metrics"
         }
     }
 
@@ -185,14 +255,35 @@ async def health_check():
     Returns:
         Dict: Health status
     """
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    redis_cache = get_redis_cache()
+    redis_healthy = redis_cache and redis_cache.enabled
+    
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "redis": "healthy" if redis_healthy else "unavailable"
+    }
+
+@app.get("/metrics")
+async def get_metrics():
+    """
+    Get performance metrics.
+    
+    Returns:
+        Dict: Performance statistics
+    """
+    return {
+        "performance_stats": perf_monitor.get_all_stats(),
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 
 # ==================== HISTORY ENDPOINTS (Backend Authoritative) ====================
 
 @app.get("/history")
+@require_auth
 async def get_history(
-    authorization: Optional[str] = Header(None),
+    req: Request,
     limit: int = 20,
     offset: int = 0
 ):
@@ -202,8 +293,13 @@ async def get_history(
     **Backend Authoritative**: Only backend can write history.
     Frontend reads history via this endpoint only.
     
+    **Security:**
+    - JWT validation required
+    - Rate limiting enforced
+    - Pagination limits enforced
+    
     Args:
-        authorization: Bearer token for authentication
+        req: FastAPI Request object
         limit: Number of results to return (max 100)
         offset: Pagination offset
         
@@ -212,12 +308,14 @@ async def get_history(
         
     Raises:
         HTTPException 401: If user is not authenticated
+        HTTPException 429: Rate limited
     """
-    # Extract and validate user from JWT
-    user_id = await extract_user_from_token(authorization)
+    # Extract user_id from request state (set by @require_auth)
+    user_id = req.state.user_id
     
     # Limit validation
-    limit = min(limit, 100)
+    limit = min(max(1, limit), 100)  # Between 1-100
+    offset = max(0, offset)  # Non-negative
     
     # Get history from backend service
     history_data = await get_search_history(user_id, limit, offset)
@@ -226,27 +324,38 @@ async def get_history(
 
 
 @app.delete("/history/{search_id}")
+@require_auth
 async def delete_history(
-    search_id: str,
-    authorization: Optional[str] = Header(None)
+    req: Request,
+    search_id: str
 ):
     """
     Delete a specific search history item.
     
     **Backend Authoritative**: Only backend can delete history.
     
+    **Security:**
+    - JWT validation required
+    - Input validation (UUID format)
+    - Ownership verification
+    
     Args:
+        req: FastAPI Request object
         search_id: ID of search to delete
-        authorization: Bearer token for authentication
         
     Returns:
         Dict with deletion status
         
     Raises:
         HTTPException 401: If user is not authenticated
+        HTTPException 400: Invalid search_id format
     """
-    # Extract and validate user from JWT
-    user_id = await extract_user_from_token(authorization)
+    # Extract user_id from request state (set by @require_auth)
+    user_id = req.state.user_id
+    
+    # Validate UUID format
+    if not InputSanitizer.validate_uuid(search_id):
+        raise HTTPException(status_code=400, detail="Invalid search_id format")
     
     # Delete history item
     result = await delete_search_history_item(user_id, search_id)
@@ -255,25 +364,31 @@ async def delete_history(
 
 
 @app.delete("/history")
+@require_auth
 async def clear_history(
-    authorization: Optional[str] = Header(None)
+    req: Request
 ):
     """
     Clear all search history for the authenticated user.
     
     **Backend Authoritative**: Only backend can clear history.
     
+    **Security:**
+    - JWT validation required
+    - Rate limiting enforced
+    
     Args:
-        authorization: Bearer token for authentication
+        req: FastAPI Request object
         
     Returns:
         Dict with clear status
         
     Raises:
         HTTPException 401: If user is not authenticated
+        HTTPException 429: Rate limited
     """
-    # Extract and validate user from JWT
-    user_id = await extract_user_from_token(authorization)
+    # Extract user_id from request state (set by @require_auth)
+    user_id = req.state.user_id
     
     # Clear all history
     result = await clear_all_history(user_id)
@@ -318,6 +433,257 @@ async def test_search(query: str):
         "confidence_score": 0.8,
         "markdown_content": f"# Test Result\n\nThis is a test markdown response for: {query}"
     }
+
+
+# ============================================================================
+# NEW BACKEND-AUTHORITATIVE SEARCH ENDPOINTS
+# ============================================================================
+
+@app.post("/api/search")
+@require_auth
+async def backend_authoritative_search(
+    req: Request,
+    request: SearchRequest
+):
+    """
+    **Backend-Authoritative Search Endpoint**
+    
+    Complete search lifecycle with atomic quota enforcement:
+    1. Validates JWT and authenticates user
+    2. Checks and decrements quota atomically (prevents race conditions)
+    3. Creates pending search history entry
+    4. Executes multi-agent orchestrator
+    5. Updates search history with results/failure
+    6. Logs usage for analytics
+    7. Refunds quota on failure
+    
+    **Ownership Model:**
+    - Backend owns ALL writes (quota, history, usage logs)
+    - Frontend reads via API only
+    - No client can bypass quota limits
+    - Atomic operations prevent race conditions
+    
+    **Quota Enforcement:**
+    - Atomic decrement using database function
+    - Supports concurrent searches per user
+    - Automatic refund on search failure
+    
+    **Security:**
+    - JWT validation required
+    - Input sanitization (XSS, SQL injection prevention)
+    - Rate limiting enforced
+    - Request logging
+    
+    **Performance:**
+    - Redis cache for duplicate queries
+    - Async execution with asyncio
+    - Performance tracking
+    - Optional queue for long searches
+    
+    Args:
+        req: FastAPI Request object
+        request: SearchRequest with query
+        
+    Returns:
+        Complete search results with quota info
+        
+    Raises:
+        HTTPException 401: Not authenticated
+        HTTPException 429: Quota exceeded or rate limited
+        HTTPException 500: Search failed
+    """
+    start_time = time.time()
+    
+    try:
+        # Extract user_id from request state (set by @require_auth)
+        user_id = req.state.user_id
+        
+        # Sanitize and validate query
+        if not request.query or not request.query.strip():
+            raise HTTPException(status_code=400, detail="Query cannot be empty")
+        
+        # Sanitize query (prevent XSS, SQL injection)
+        query = InputSanitizer.sanitize_search_query(request.query.strip())
+        
+        if not query:
+            raise HTTPException(status_code=400, detail="Invalid query after sanitization")
+        
+        # Log successful authentication
+        security_logger.log_auth_success(user_id, req)
+        
+        print(f"🔍 Backend-authoritative search: {query} (user: {user_id})")
+        
+        # Check Redis cache for duplicate query
+        redis_cache = get_redis_cache()
+        query_hash = hash_query(query)
+        
+        if redis_cache and redis_cache.enabled:
+            cached_result = await redis_cache.get_search_result(query_hash)
+            if cached_result:
+                print(f"✅ Cache HIT - returning cached result")
+                
+                # Track cache hit performance
+                duration = time.time() - start_time
+                await perf_monitor.track("search_cache_hit", duration)
+                
+                return JSONResponse(content=cached_result)
+        
+        # Get user's plan type for token limits
+        from subscription_middleware import supabase as sub_supabase
+        sub_result = sub_supabase.table('user_subscriptions') \
+            .select('plan_type') \
+            .eq('user_id', user_id) \
+            .single() \
+            .execute()
+        
+        plan_type = sub_result.data.get('plan_type', 'free') if sub_result.data else 'free'
+        
+        # Execute backend-authoritative search lifecycle with idempotent agents
+        result = await search_service.execute_search(
+            user_id=user_id,
+            query=query,
+            plan_type=plan_type,  # For token usage limits
+            metadata={
+                "endpoint": "/api/search",
+                "timestamp": datetime.utcnow().isoformat(),
+                "query_hash": query_hash
+            }
+        )
+        
+        print(f"✅ Search completed: {result['search_id']}")
+        
+        # Cache the result
+        if redis_cache and redis_cache.enabled and result.get('status') == 'success':
+            await redis_cache.cache_search_result(
+                query_hash,
+                result,
+                ttl=3600  # Cache for 1 hour
+            )
+        
+        # Track performance
+        duration = time.time() - start_time
+        await perf_monitor.track("search_execution", duration)
+        print(f"⏱️  Search duration: {duration:.2f}s")
+        
+        return JSONResponse(
+            content=result,
+            headers=get_quota_headers({
+                "searches_remaining": result['quota']['searches_remaining'],
+                "plan_type": result['quota']['plan_type'],
+                "reset_date": ""  # TODO: Add from subscription
+            })
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Search error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+
+@app.get("/api/search/stream")
+async def backend_authoritative_search_stream(
+    query: str,
+    authorization: Optional[str] = Header(None)
+):
+    """
+    **Backend-Authoritative Search with SSE Streaming**
+    
+    Same as /api/search but streams progress updates via Server-Sent Events.
+    
+    **Real-time Updates:**
+    - Quota check status
+    - Search creation
+    - Agent step progress
+    - Final completion
+    
+    **Ownership Model:**
+    - Backend owns all state transitions
+    - Frontend receives read-only updates
+    - Quota enforced before streaming starts
+    
+    Args:
+        query: Search query string
+        authorization: Bearer token (required)
+        
+    Returns:
+        StreamingResponse with SSE events
+        
+    Raises:
+        HTTPException 401: Not authenticated
+        HTTPException 429: Quota exceeded
+    """
+    try:
+        # Extract and validate user from JWT
+        user_id = await extract_user_from_token(authorization)
+        
+        if not query or not query.strip():
+            raise HTTPException(status_code=400, detail="Query cannot be empty")
+        
+        query = query.strip()
+        print(f"🔍 Streaming search: {query} (user: {user_id})")
+        
+        # Stream search progress
+        async def event_generator():
+            try:
+                async for event in search_service.stream_search_progress(user_id, query):
+                    yield event
+            except Exception as e:
+                error_event = f"data: {json.dumps({'event': 'error', 'message': str(e)})}\n\n"
+                yield error_event
+        
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Streaming error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Streaming failed: {str(e)}")
+
+
+@app.get("/api/quota")
+@require_auth
+async def get_quota_status(
+    req: Request
+):
+    """
+    Get current quota status without decrementing
+    
+    **Backend Authoritative**: Only backend tracks quota
+    
+    **Security:**
+    - JWT validation required
+    - Read-only operation
+    - Rate limiting enforced
+    
+    Args:
+        req: FastAPI Request object
+        
+    Returns:
+        Current quota information
+        
+    Raises:
+        HTTPException 401: Not authenticated
+        HTTPException 429: Rate limited
+    """
+    user_id = req.state.user_id
+    quota_status = await quota_service.get_quota_status(user_id)
+    return JSONResponse(content=quota_status)
+
+
+# ============================================================================
+# LEGACY SEARCH ENDPOINTS (Deprecated - use /api/search instead)
+# ============================================================================
 
 @app.post("/search", response_model=SearchResponse)
 async def search_research_paper(
