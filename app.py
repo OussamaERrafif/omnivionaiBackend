@@ -22,7 +22,7 @@ from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Literal
 import asyncio
 import uvicorn
 import json
@@ -69,6 +69,9 @@ from performance_optimization import (
 import os
 import time
 
+# Type alias for search modes
+SearchMode = Literal["deep", "moderate", "quick", "sla"]
+
 # Pydantic models for request/response
 class SearchRequest(BaseModel):
     """
@@ -76,8 +79,10 @@ class SearchRequest(BaseModel):
     
     Attributes:
         query (str): The research question or topic to investigate
+        search_mode (SearchMode): Search mode - "deep", "moderate", "quick", or "sla". Default is "deep"
     """
     query: str
+    search_mode: SearchMode = "deep"  # Default to deep search
 
 class CitationModel(BaseModel):
     """
@@ -726,6 +731,7 @@ async def search_research_paper(
             raise HTTPException(status_code=400, detail="Query cannot be empty")
 
         print(f"🔍 Received search request: {request.query.strip()}")
+        print(f"🎯 Search mode: {request.search_mode}")
         
         # Check user quota before processing
         quota_info = await check_user_quota(authorization)
@@ -734,8 +740,8 @@ async def search_research_paper(
         # Generate unique search ID
         search_id = str(uuid.uuid4())
         
-        # Execute the search
-        result: FinalAnswer = await orchestrator.search(request.query.strip())
+        # Execute the search with search mode
+        result: FinalAnswer = await orchestrator.search(request.query.strip(), search_mode=request.search_mode)
 
         print(f"✅ Search completed with {len(result.citations)} citations")
         
@@ -781,6 +787,7 @@ async def search_research_paper(
 @app.get("/search/{query}")
 async def search_research_paper_get(
     query: str,
+    search_mode: str = "deep",
     authorization: Optional[str] = Header(None)
 ):
     """
@@ -803,6 +810,7 @@ async def search_research_paper_get(
     
     Args:
         query (str): The research query (URL encoded in path)
+        search_mode (str): Search mode - "deep", "moderate", "quick", or "sla". Default is "deep"
         authorization (Optional[str]): Bearer token for authentication
         
     Returns:
@@ -832,6 +840,7 @@ async def search_research_paper_get(
         raise HTTPException(status_code=400, detail="Query cannot be empty")
     
     print(f"🔍 Received streaming search request: {query.strip()}")
+    print(f"🎯 Search mode: {search_mode}")
     
     # Check user quota before processing
     try:
@@ -870,8 +879,8 @@ async def search_research_paper_get(
                 
                 await progress_queue.put(f"data: {response.model_dump_json()}\n\n")
 
-            # Start the search in a separate task
-            search_task = asyncio.create_task(orchestrator.search(query.strip(), queued_progress_callback))
+            # Start the search in a separate task with search mode
+            search_task = asyncio.create_task(orchestrator.search(query.strip(), queued_progress_callback, search_mode=search_mode))
             
             # Yield progress updates as they come
             while not search_task.done():
@@ -949,7 +958,7 @@ async def search_research_paper_get(
     )
 
 @app.get("/search/sync/{query}", response_model=SearchResponse)
-async def search_research_paper_sync(query: str):
+async def search_research_paper_sync(query: str, search_mode: str = "deep"):
     """
     Execute AI Deep Search via GET request without streaming (compatibility endpoint).
     
@@ -960,6 +969,7 @@ async def search_research_paper_sync(query: str):
     
     Args:
         query (str): The research query (URL encoded in path)
+        search_mode (str): Search mode - "deep", "moderate", "quick", or "sla". Default is "deep"
         
     Returns:
         SearchResponse: Complete search result with answer, citations, and markdown content
@@ -970,7 +980,7 @@ async def search_research_paper_sync(query: str):
         
     Example:
         ```
-        GET /search/sync/What%20is%20quantum%20computing
+        GET /search/sync/What%20is%20quantum%20computing?search_mode=quick
         
         Returns JSON:
         {
@@ -985,8 +995,8 @@ async def search_research_paper_sync(query: str):
         if not query or not query.strip():
             raise HTTPException(status_code=400, detail="Query cannot be empty")
 
-        # Execute the search without progress callback (original behavior)
-        result: FinalAnswer = await orchestrator.search(query.strip())
+        # Execute the search without progress callback with search mode
+        result: FinalAnswer = await orchestrator.search(query.strip(), search_mode=search_mode)
 
         # Convert citations to dict format for JSON response (optimized)
         citations_data = [dataclasses.asdict(citation) for citation in result.citations]

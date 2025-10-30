@@ -153,17 +153,60 @@ class ResearchAgent(BaseAgent):
             'plural of', 'present tense', 'past tense', 'third-person singular',
             'see definitions', 'word of the day', 'thesaurus:', 'synonyms and antonyms',
             'merriam-webster.com dictionary', 'noun:', 'verb:', 'adjective:', 'adverb:',
-            'etymology:', 'pronunciation:', 'definition:', 'meaning:'
+            'etymology:', 'pronunciation:', 'definition:', 'meaning:', 'define:',
+            'part of speech', 'word forms', 'how to say', 'what does', 'mean in',
+            'dictionary entry', 'lexical', 'vocabulary word', 'word origin',
+            'conjugation', 'declension', 'inflection', 'grammatical', 'phonetic',
+            'syllable', 'antonym', 'synonym', 'related words', 'word family'
         ]
         dictionary_penalty = 0.0
         dictionary_matches = sum(1 for indicator in dictionary_indicators if indicator in content_lower)
-        if dictionary_matches >= 3:
-            # Strong dictionary signature - heavily penalize
-            dictionary_penalty = -0.6
-            print(f"   🚫 Dictionary content detected ({dictionary_matches} indicators) - applying penalty")
+        
+        # Also check title for dictionary indicators
+        title_dictionary_indicators = ['dictionary', 'thesaurus', 'define', 'definition', 'meaning of']
+        title_dictionary_match = any(indicator in title_lower for indicator in title_dictionary_indicators)
+        
+        if title_dictionary_match or dictionary_matches >= 3:
+            # Strong dictionary signature - heavily penalize (essentially filter out)
+            dictionary_penalty = -0.9
+            print(f"   🚫 Dictionary/definition content detected ({dictionary_matches} indicators) - applying heavy penalty")
         elif dictionary_matches >= 1:
             # Mild dictionary signature - moderate penalty
-            dictionary_penalty = -0.3
+            dictionary_penalty = -0.5
+
+        # 5.6. Foreign language detection (penalize non-English content)
+        # Common non-English indicators (French, Spanish, German, etc.)
+        foreign_language_indicators = [
+            # French
+            'auteur:', 'dernière révision:', 'temps de lecture:', 'examinateur:',
+            'anatomie de', 'à travers', 'suffisamment', 'permet d\'',
+            
+            # Spanish
+            'autor:', 'última revisión:', 'tiempo de lectura:',
+            
+            # German
+            'autor:', 'letzte überprüfung:', 'lesezeit:',
+            
+            # General non-English patterns
+            'última', 'através', 'permet', 'permite', 'données',
+            
+            # Check for excessive non-ASCII characters (non-Latin alphabets)
+        ]
+        
+        foreign_penalty = 0.0
+        foreign_matches = sum(1 for indicator in foreign_language_indicators if indicator in content_lower)
+        
+        # Count non-ASCII characters
+        non_ascii_count = sum(1 for char in content if ord(char) > 127)
+        non_ascii_ratio = non_ascii_count / len(content) if len(content) > 0 else 0
+        
+        if foreign_matches >= 2 or non_ascii_ratio > 0.15:
+            # Strong foreign language signature
+            foreign_penalty = -0.8
+            print(f"   🚫 Foreign language content detected - applying penalty")
+        elif foreign_matches >= 1 or non_ascii_ratio > 0.08:
+            # Mild foreign language signature
+            foreign_penalty = -0.4
 
         # 6. TRUST MULTIPLIER - Apply trust scoring to boost trusted sources
         trust_info = TrustedDomains.get_domain_trust_info(url)
@@ -175,11 +218,68 @@ class ResearchAgent(BaseAgent):
             trust_multiplier = 1.0 + (trust_score_normalized * 0.5)  # 1.375 to 1.475 multiplier
             print(f"   ✅ TRUSTED SOURCE: {trust_info['domain']} ({trust_info['category']}) - Trust boost: {trust_multiplier:.2f}x")
 
-        # Combine all factors with trust multiplier and dictionary penalty
-        final_score = ((base_score * quality_multiplier) + title_section_bonus + diversity_bonus + structure_bonus + dictionary_penalty) * trust_multiplier
+        # Combine all factors with trust multiplier, dictionary penalty, and foreign language penalty
+        final_score = ((base_score * quality_multiplier) + title_section_bonus + diversity_bonus + structure_bonus + dictionary_penalty + foreign_penalty) * trust_multiplier
 
         # Ensure score stays within reasonable bounds
         return min(1.0, max(0.0, final_score))
+
+    async def _verify_source_relevance(self, source: SourceMetadata, query: str, main_topic: str) -> bool:
+        """
+        Use AI to verify if a source is actually relevant to the user's query.
+        
+        This method helps filter out completely irrelevant sources that might have
+        high keyword scores but don't actually relate to the search topic.
+        
+        Args:
+            source: The source to verify
+            query: Original user query
+            main_topic: Main topic extracted from query
+            
+        Returns:
+            bool: True if source is relevant, False otherwise
+        """
+        if not Config.ENABLE_AI_RELEVANCE_CHECK:
+            return True  # Skip verification if disabled
+        
+        # Quick check: if source has very high relevance score, trust it
+        if source.relevance_score > 0.6:
+            return True
+        
+        # Create a concise verification prompt
+        verification_prompt = f"""Is this content relevant to the query about "{main_topic}"?
+
+Query: {query}
+
+Source Title: {source.title}
+Source Section: {source.section}
+Content Preview: {source.content[:400]}
+
+Answer with ONLY 'YES' or 'NO'. 
+- YES if the content is directly related to {main_topic}
+- NO if it's about something completely different (dictionaries, unrelated topics, off-topic content)
+
+Answer:"""
+
+        try:
+            from langchain_core.prompts import PromptTemplate
+            prompt = PromptTemplate(input_variables=["text"], template="{text}")
+            chain = prompt | self.llm
+            result = await chain.ainvoke({"text": verification_prompt})
+            
+            response = result.content if hasattr(result, 'content') else str(result)
+            response_clean = response.strip().upper()
+            
+            is_relevant = 'YES' in response_clean
+            
+            if not is_relevant:
+                print(f"   🚫 AI filtered out irrelevant source: {source.title[:50]}...")
+            
+            return is_relevant
+            
+        except Exception as e:
+            print(f"   ⚠️ AI relevance check failed: {e}, including source by default")
+            return True  # On error, include the source
 
     def search_web(self, query: str, max_results: int = 5) -> List[Dict]:
         """
@@ -275,9 +375,14 @@ class ResearchAgent(BaseAgent):
                 has_partial_match = any(any(part in content.lower() for part in kw.lower().split()) for kw in keywords)
                 is_substantial = len(content.strip()) > 100
                 
-                if content and (is_substantial or has_keyword_match or has_partial_match):
+                # More strict: require at least partial keyword match OR be substantial with high relevance
+                if content and (has_keyword_match or (is_substantial and has_partial_match)):
                     # Calculate enhanced relevance score with trust
                     relevance = self._calculate_advanced_relevance_score(content, keywords, section_name, title_text, url)
+
+                    # Skip very low relevance content early
+                    if relevance < Config.MIN_RELEVANCE_SCORE * 0.7:  # Allow slightly lower during extraction
+                        continue
 
                     # Get trust information
                     trust_info = TrustedDomains.get_domain_trust_info(url)
@@ -476,6 +581,27 @@ Example format: ["machine learning agent", "autonomous software", "AI system arc
         print(f"   📊 Filtering sources with relevance >= {Config.MIN_RELEVANCE_SCORE}")
         filtered_sources = [src for src in unique_sources if src.relevance_score >= Config.MIN_RELEVANCE_SCORE]
         print(f"   ✅ Kept {len(filtered_sources)} of {len(unique_sources)} sources after relevance filtering")
+
+        # AI-based relevance verification (if enabled)
+        if Config.ENABLE_AI_RELEVANCE_CHECK and filtered_sources:
+            print(f"   🤖 Running AI relevance verification on {len(filtered_sources)} sources...")
+            verified_sources = []
+            
+            # Verify sources in batches to avoid too many API calls
+            # Only verify non-trusted sources or those with borderline scores
+            for src in filtered_sources:
+                # Trust high-scoring trusted sources automatically
+                if src.is_trusted and src.relevance_score > 0.5:
+                    verified_sources.append(src)
+                    continue
+                
+                # Verify others with AI
+                is_relevant = await self._verify_source_relevance(src, main_topic, main_topic)
+                if is_relevant:
+                    verified_sources.append(src)
+            
+            filtered_sources = verified_sources
+            print(f"   ✅ AI verification complete: {len(filtered_sources)} sources passed")
 
         # Separate trusted and untrusted sources
         trusted_sources = [src for src in filtered_sources if src.is_trusted]

@@ -85,7 +85,18 @@ class TrustedDomains:
         'acm.org', 'ieee.org', 'arxiv.org', 'biorxiv.org', 'medrxiv.org',
         'pubmed.ncbi.nlm.nih.gov', 'ncbi.nlm.nih.gov', 'doi.org',
         'jstor.org', 'sage.com', 'cambridge.org', 'oxfordjournals.org',
-        'aaas.org', 'cell.com', 'thelancet.com', 'nejm.org', 'bmj.com'
+        'aaas.org', 'cell.com', 'thelancet.com', 'nejm.org', 'bmj.com',
+        
+        # Physics and Astronomy specific
+        'aps.org', 'iop.org', 'eso.org', 'space.com', 'skyandtelescope.org',
+        'astronomy.com', 'aanda.org', 'adsabs.harvard.edu', 'stsci.edu',
+        'sciencenews.org', 'quantamagazine.org', 'phys.org', 'physicsworld.com',
+        
+        # Math and Computer Science
+        'mathworld.wolfram.com', 'projecteuclid.org', 'ams.org',
+        
+        # Medical and Biology
+        'clinicaltrials.gov', 'cochranelibrary.com', 'microbiologyresearch.org'
     }
     
     # Established News & Media Organizations
