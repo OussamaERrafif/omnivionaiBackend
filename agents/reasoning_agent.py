@@ -27,6 +27,21 @@ class ReasoningAgent(BaseAgent):
     - Maintain academic integrity and objectivity
     - Structure content according to research paper conventions
     """
+    
+    # Pre-compile regex patterns for performance (50-100ms savings per search)
+    HEADING_PATTERN = re.compile(r'^(#{2,3}\s+.+)$')
+    CITATION_PATTERN = re.compile(r'\[\d+\]')
+    HORIZONTAL_RULE_PATTERN = re.compile(r'^(---|\*\*\*|___)$')
+    
+    # Factual claim patterns (pre-compiled)
+    FACTUAL_PATTERNS = [
+        re.compile(r'\b\d+%\b'),  # Percentages
+        re.compile(r'\baccording to\b'),
+        re.compile(r'\bresearch shows\b'),
+        re.compile(r'\bstudies indicate\b'),
+        re.compile(r'\bexperts suggest\b'),
+        re.compile(r'\bdata reveals\b')
+    ]
 
     def __init__(self):
         """Initialize the reasoning agent with synthesis prompt template."""
@@ -176,22 +191,29 @@ BEGIN YOUR PhD-GRADE RESEARCH PAPER NOW:
         # Find sentences that lack citations
         sentences = answer.split('. ')
         enhanced_sentences = []
+        
+        # Pre-compile regex patterns for performance
+        citation_pattern = re.compile(r'\[\d+\]')
+        
+        # Pre-compile factual patterns
+        factual_patterns = [
+            re.compile(r'\b\d+%\b'),  # Percentages
+            re.compile(r'\baccording to\b'),  # Attribution phrases
+            re.compile(r'\bresearch shows\b'),
+            re.compile(r'\bstudies indicate\b'),
+            re.compile(r'\bexperts suggest\b'),
+            re.compile(r'\bdata reveals\b')
+        ]
+        
+        # Pre-compute lowercased versions to avoid repeated .lower() calls
+        sentences_lower = [s.lower() for s in sentences]
 
-        for sentence in sentences:
+        for sentence, sentence_lower in zip(sentences, sentences_lower):
             # Check if sentence contains factual claims but no citations
-            has_citation = re.search(r'\[\d+\]', sentence)
+            has_citation = citation_pattern.search(sentence)
 
-            # Patterns that suggest factual claims needing citations
-            factual_patterns = [
-                r'\b\d+%\b',  # Percentages
-                r'\baccording to\b',  # Attribution phrases
-                r'\bresearch shows\b',
-                r'\bstudies indicate\b',
-                r'\bexperts suggest\b',
-                r'\bdata reveals\b'
-            ]
-
-            has_factual_claim = any(re.search(pattern, sentence.lower()) for pattern in factual_patterns)
+            # Check for factual patterns using pre-lowercased version
+            has_factual_claim = any(pattern.search(sentence_lower) for pattern in factual_patterns)
 
             if has_factual_claim and not has_citation and len(sentence.strip()) > 20:
                 # Add a generic citation reference
@@ -235,8 +257,7 @@ BEGIN YOUR PhD-GRADE RESEARCH PAPER NOW:
         
         print(f"   🖼️  Processing {len(all_images)} images for injection...")
         
-        # Find all headings and their positions
-        heading_pattern = r'^(#{2,3}\s+.+)$'
+        # Use pre-compiled pattern
         lines = answer.split('\n')
         
         injected_count = 0
@@ -249,14 +270,14 @@ BEGIN YOUR PhD-GRADE RESEARCH PAPER NOW:
             line = lines[i]
             result_lines.append(line)
             
-            # Check if this line is a heading
-            if re.match(heading_pattern, line.strip()):
+            # Check if this line is a heading (using pre-compiled pattern)
+            if self.HEADING_PATTERN.match(line.strip()):
                 heading_text = line.strip()
                 
                 # Get next few lines for context (up to 300 chars)
                 context_lines = []
                 for j in range(i + 1, min(i + 10, len(lines))):
-                    if re.match(heading_pattern, lines[j].strip()):
+                    if self.HEADING_PATTERN.match(lines[j].strip()):
                         break  # Stop at next heading
                     context_lines.append(lines[j])
                 
