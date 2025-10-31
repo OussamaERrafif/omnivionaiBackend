@@ -16,6 +16,7 @@ from .summarizer_agent import SummarizerAgent
 from .verification_agent import VerificationAgent
 from .reasoning_agent import ReasoningAgent
 from .source_citer_agent import SourceCiterAgent
+from .image_analyzer_agent import ImageAnalyzerAgent
 from .data_models import FinalAnswer
 from .config import Config
 
@@ -59,6 +60,7 @@ class Orchestrator:
         self.verification_agent = VerificationAgent()
         self.reasoning_agent = ReasoningAgent()
         self.citer_agent = SourceCiterAgent()
+        self.image_analyzer = ImageAnalyzerAgent()
 
     async def search(self, query: str, progress_callback=None, search_mode: SearchMode = "deep") -> FinalAnswer:
         """
@@ -276,6 +278,57 @@ class Orchestrator:
                 citations=[],
                 confidence_score=0.0
             )
+
+        # Step 2.5: Analyze images with AI for better placement
+        print("\n🖼️  Analyzing images...")
+        step_start = time.time()
+        await emit_progress("image_analysis", "started", "Analyzing images with AI for contextual placement...", 42.0)
+        
+        # Collect all images from sources
+        all_images = []
+        for source in sources:
+            if hasattr(source, 'images') and source.images:
+                all_images.extend(source.images)
+        
+        if all_images:
+            # Remove duplicates based on URL
+            unique_images = []
+            seen_urls = set()
+            for img in all_images:
+                if img.get('url') and img['url'] not in seen_urls:
+                    seen_urls.add(img['url'])
+                    unique_images.append(img)
+            
+            # Limit to max 15 images for AI analysis
+            max_analyze = 15
+            if len(unique_images) > max_analyze:
+                print(f"   Found {len(unique_images)} unique images, limiting to {max_analyze} for AI analysis")
+                unique_images = unique_images[:max_analyze]
+            else:
+                print(f"   Found {len(unique_images)} unique images to analyze")
+            
+            # Analyze images with AI
+            main_topic = query_analysis.get('main_topic', query)
+            analyzed_images = await self.image_analyzer.analyze_images(unique_images, query, main_topic)
+            
+            # Update sources with analyzed images
+            for source in sources:
+                if hasattr(source, 'images') and source.images:
+                    # Replace with analyzed versions
+                    enhanced_imgs = []
+                    for img in source.images:
+                        # Find the analyzed version
+                        analyzed = next((ai for ai in analyzed_images if ai.get('url') == img.get('url')), None)
+                        enhanced_imgs.append(analyzed if analyzed else img)
+                    source.images = enhanced_imgs
+            
+            await emit_progress("image_analysis", "completed", f"Analyzed {len(analyzed_images)} images", 45.0)
+            print(f"   ✅ Image analysis complete")
+        else:
+            await emit_progress("image_analysis", "completed", "No images found in sources", 45.0)
+            print(f"   ℹ️  No images found to analyze")
+        
+        step_times["image_analysis"] = time.time() - step_start
 
         # Step 3: Summarize
         print("\n📝 Summarizing content...")

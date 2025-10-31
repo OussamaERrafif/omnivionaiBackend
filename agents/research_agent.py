@@ -224,62 +224,63 @@ class ResearchAgent(BaseAgent):
         # Ensure score stays within reasonable bounds
         return min(1.0, max(0.0, final_score))
 
-    async def _verify_source_relevance(self, source: SourceMetadata, query: str, main_topic: str) -> bool:
-        """
-        Use AI to verify if a source is actually relevant to the user's query.
-        
-        This method helps filter out completely irrelevant sources that might have
-        high keyword scores but don't actually relate to the search topic.
-        
-        Args:
-            source: The source to verify
-            query: Original user query
-            main_topic: Main topic extracted from query
-            
-        Returns:
-            bool: True if source is relevant, False otherwise
-        """
-        if not Config.ENABLE_AI_RELEVANCE_CHECK:
-            return True  # Skip verification if disabled
-        
-        # Quick check: if source has very high relevance score, trust it
-        if source.relevance_score > 0.6:
-            return True
-        
-        # Create a concise verification prompt
-        verification_prompt = f"""Is this content relevant to the query about "{main_topic}"?
-
-Query: {query}
-
-Source Title: {source.title}
-Source Section: {source.section}
-Content Preview: {source.content[:400]}
-
-Answer with ONLY 'YES' or 'NO'. 
-- YES if the content is directly related to {main_topic}
-- NO if it's about something completely different (dictionaries, unrelated topics, off-topic content)
-
-Answer:"""
-
-        try:
-            from langchain_core.prompts import PromptTemplate
-            prompt = PromptTemplate(input_variables=["text"], template="{text}")
-            chain = prompt | self.llm
-            result = await chain.ainvoke({"text": verification_prompt})
-            
-            response = result.content if hasattr(result, 'content') else str(result)
-            response_clean = response.strip().upper()
-            
-            is_relevant = 'YES' in response_clean
-            
-            if not is_relevant:
-                print(f"   🚫 AI filtered out irrelevant source: {source.title[:50]}...")
-            
-            return is_relevant
-            
-        except Exception as e:
-            print(f"   ⚠️ AI relevance check failed: {e}, including source by default")
-            return True  # On error, include the source
+    # COMMENTED OUT: AI relevance check was using too many tokens and slowing down searches
+    # async def _verify_source_relevance(self, source: SourceMetadata, query: str, main_topic: str) -> bool:
+    #     """
+    #     Use AI to verify if a source is actually relevant to the user's query.
+    #     
+    #     This method helps filter out completely irrelevant sources that might have
+    #     high keyword scores but don't actually relate to the search topic.
+    #     
+    #     Args:
+    #         source: The source to verify
+    #         query: Original user query
+    #         main_topic: Main topic extracted from query
+    #         
+    #     Returns:
+    #         bool: True if source is relevant, False otherwise
+    #     """
+    #     if not Config.ENABLE_AI_RELEVANCE_CHECK:
+    #         return True  # Skip verification if disabled
+    #     
+    #     # Quick check: if source has very high relevance score, trust it
+    #     if source.relevance_score > 0.6:
+    #         return True
+    #     
+    #     # Create a concise verification prompt
+    #     verification_prompt = f"""Is this content relevant to the query about "{main_topic}"?
+    # 
+    # Query: {query}
+    # 
+    # Source Title: {source.title}
+    # Source Section: {source.section}
+    # Content Preview: {source.content[:400]}
+    # 
+    # Answer with ONLY 'YES' or 'NO'. 
+    # - YES if the content is directly related to {main_topic}
+    # - NO if it's about something completely different (dictionaries, unrelated topics, off-topic content)
+    # 
+    # Answer:"""
+    # 
+    #     try:
+    #         from langchain_core.prompts import PromptTemplate
+    #         prompt = PromptTemplate(input_variables=["text"], template="{text}")
+    #         chain = prompt | self.llm
+    #         result = await chain.ainvoke({"text": verification_prompt})
+    #         
+    #         response = result.content if hasattr(result, 'content') else str(result)
+    #         response_clean = response.strip().upper()
+    #         
+    #         is_relevant = 'YES' in response_clean
+    #         
+    #         if not is_relevant:
+    #             print(f"   🚫 AI filtered out irrelevant source: {source.title[:50]}...")
+    #         
+    #         return is_relevant
+    #         
+    #     except Exception as e:
+    #         print(f"   ⚠️ AI relevance check failed: {e}, including source by default")
+    #         return True  # On error, include the source
 
     def search_web(self, query: str, max_results: int = 5) -> List[Dict]:
         """
@@ -322,6 +323,95 @@ Answer:"""
                 print(f"Fallback search also failed: {e2}")
                 return []
 
+    def _extract_images_from_page(self, soup: BeautifulSoup, base_url: str, keywords: List[str]) -> List[dict]:
+        """
+        Extract relevant images from a web page.
+        
+        Args:
+            soup: BeautifulSoup object of the page
+            base_url: Base URL for resolving relative image URLs
+            keywords: Keywords to match against image alt text and context
+            
+        Returns:
+            List of dicts containing image url, alt text, and context
+        """
+        from urllib.parse import urljoin, urlparse
+        
+        images = []
+        img_tags = soup.find_all('img')
+        
+        # Pre-filter only the most obvious non-content images (relaxed filtering)
+        skip_url_patterns = [
+            'logo', 'icon', 'avatar', 'badge', 'button', 
+            'pixel', 'tracker', 'spacer', '1x1'
+        ]
+        
+        for img in img_tags[:20]:  # Check more images
+            try:
+                # Get image URL
+                img_url = img.get('src') or img.get('data-src')
+                if not img_url:
+                    continue
+                
+                # Skip only very obvious non-content images in URL
+                url_lower = img_url.lower()
+                if any(pattern in url_lower for pattern in skip_url_patterns):
+                    continue
+                
+                # Skip only tiny images (likely icons) - reduced threshold
+                width = img.get('width')
+                height = img.get('height')
+                if width and height:
+                    try:
+                        w, h = int(width), int(height)
+                        # Only skip very small images (relaxed from 150 to 80)
+                        if w < 80 or h < 80:
+                            continue
+                    except ValueError:
+                        pass
+                
+                # Convert relative URLs to absolute
+                img_url = urljoin(base_url, img_url)
+                
+                # Skip data URLs and invalid schemes
+                parsed = urlparse(img_url)
+                if parsed.scheme not in ['http', 'https']:
+                    continue
+                
+                # Get alt text and surrounding context
+                alt_text = img.get('alt', '')
+                title = img.get('title', '')
+                
+                # Get context from parent elements
+                context = ""
+                parent = img.find_parent(['figure', 'div', 'p'])
+                if parent:
+                    figcaption = parent.find('figcaption')
+                    if figcaption:
+                        context = figcaption.get_text(strip=True)
+                    elif parent.get_text():
+                        context = parent.get_text(strip=True)[:200]
+                
+                # More lenient: Accept images with ANY metadata OR any keyword match
+                search_text = f"{alt_text} {title} {context}".lower()
+                keyword_matches = sum(1 for kw in keywords if kw.lower() in search_text)
+                has_metadata = bool(alt_text or title or context)
+                
+                # Accept if: has any metadata OR has any keyword match OR just take first few images
+                if has_metadata or keyword_matches > 0 or len(images) < 5:
+                    images.append({
+                        'url': img_url,
+                        'alt': alt_text,
+                        'title': title,
+                        'context': context[:200] if context else ""
+                    })
+                    
+            except Exception as e:
+                print(f"   ⚠️ Error extracting image: {e}")
+                continue
+        
+        return images[:10]  # Limit final count to 10 best images
+
     def extract_content_with_sections(self, url: str, keywords: List[str]) -> List[SourceMetadata]:
         """
         Extract structured content from a URL with section-level tracking.
@@ -340,6 +430,7 @@ Answer:"""
                 - Content text
                 - Relevance score
                 - Trust information from TrustedDomains
+                - Images extracted from the page
                 
         Note:
             Handles HTTP errors gracefully, returning empty list on failure.
@@ -355,6 +446,11 @@ Answer:"""
             # Extract title
             title = soup.find('title')
             title_text = title.text if title else "Untitled"
+            
+            # Extract images from the entire page once
+            page_images = self._extract_images_from_page(soup, url, keywords)
+            if page_images:
+                print(f"   🖼️  Extracted {len(page_images)} relevant images from page")
 
             # Extract content by sections
             for idx, heading in enumerate(soup.find_all(['h1', 'h2', 'h3', 'h4'])):
@@ -401,7 +497,8 @@ Answer:"""
                         trust_score=trust_info['trust_score'],
                         is_trusted=trust_info['is_trusted'],
                         trust_category=trust_info['category'],
-                        domain=trust_info['domain']
+                        domain=trust_info['domain'],
+                        images=page_images
                     ))
 
             # If no sections found, try to extract main content
@@ -427,7 +524,8 @@ Answer:"""
                             trust_score=trust_info['trust_score'],
                             is_trusted=trust_info['is_trusted'],
                             trust_category=trust_info['category'],
-                            domain=trust_info['domain']
+                            domain=trust_info['domain'],
+                            images=page_images
                         ))
 
         except Exception as e:
@@ -587,21 +685,25 @@ Example format: ["machine learning agent", "autonomous software", "AI system arc
             print(f"   🤖 Running AI relevance verification on {len(filtered_sources)} sources...")
             verified_sources = []
             
+            # COMMENTED OUT: AI relevance check was using too many tokens and slowing down searches
             # Verify sources in batches to avoid too many API calls
             # Only verify non-trusted sources or those with borderline scores
-            for src in filtered_sources:
-                # Trust high-scoring trusted sources automatically
-                if src.is_trusted and src.relevance_score > 0.5:
-                    verified_sources.append(src)
-                    continue
-                
-                # Verify others with AI
-                is_relevant = await self._verify_source_relevance(src, main_topic, main_topic)
-                if is_relevant:
-                    verified_sources.append(src)
+            # for src in filtered_sources:
+            #     # Trust high-scoring trusted sources automatically
+            #     if src.is_trusted and src.relevance_score > 0.5:
+            #         verified_sources.append(src)
+            #         continue
+            #     
+            #     # Verify others with AI
+            #     is_relevant = await self._verify_source_relevance(src, main_topic, main_topic)
+            #     if is_relevant:
+            #         verified_sources.append(src)
+            # 
+            # filtered_sources = verified_sources
+            # print(f"   ✅ AI verification complete: {len(filtered_sources)} sources passed")
             
-            filtered_sources = verified_sources
-            print(f"   ✅ AI verification complete: {len(filtered_sources)} sources passed")
+            # Skip AI verification - use all filtered sources
+            print(f"   ⚡ Skipping AI verification for speed - using {len(filtered_sources)} sources")
 
         # Separate trusted and untrusted sources
         trusted_sources = [src for src in filtered_sources if src.is_trusted]

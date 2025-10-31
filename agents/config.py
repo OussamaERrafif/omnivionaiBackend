@@ -19,7 +19,7 @@ class Config:
     Configuration values are loaded from environment variables with fallback defaults.
     """
     # Google API Configuration (commented out - replaced with OpenAI)
-    # GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyB23DLvZZEhF6wHvI9Ir0pg1MHfNfJVoyA")
+    # GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
     # MODEL_NAME = "gemini-2.5-flash"  # Free tier model
     
     # OpenAI API Configuration

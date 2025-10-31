@@ -101,6 +101,7 @@ class CitationModel(BaseModel):
         is_trusted (bool): Whether source is from trusted domain
         trust_category (str): Human-readable trust category
         domain (str): Domain name of the source
+        images (List[Dict[str, Any]]): Images with metadata (url, alt, ai_description, relevance_keywords, etc.)
     """
     url: str
     title: str
@@ -114,6 +115,7 @@ class CitationModel(BaseModel):
     is_trusted: bool
     trust_category: str
     domain: str
+    images: List[Dict[str, Any]] = []
 
 class SearchResponse(BaseModel):
     """
@@ -123,12 +125,12 @@ class SearchResponse(BaseModel):
         answer (str): Synthesized answer to the query
         citations (List[CitationModel]): All sources cited in the answer
         confidence_score (float): Overall confidence in the answer (0.0-1.0)
-        # markdown_content (str): Full research paper in markdown format - COMMENTED OUT FOR PERFORMANCE
+        markdown_content (str): Full research paper in markdown format with embedded images
     """
     answer: str
     citations: List[CitationModel]
     confidence_score: float
-    # markdown_content: str  # COMMENTED OUT FOR PERFORMANCE
+    markdown_content: str = ""  # Full markdown research paper with images
 
 class ProgressUpdate(BaseModel):
     """
@@ -760,8 +762,8 @@ async def search_research_paper(
         response_data = SearchResponse(
             answer=result.answer,
             citations=citations_data,
-            confidence_score=result.confidence_score
-            # markdown_content=result.markdown_content  # COMMENTED OUT FOR PERFORMANCE
+            confidence_score=result.confidence_score,
+            markdown_content=result.answer  # Use answer field which has images injected
         )
         
         # Return response with quota headers
@@ -920,8 +922,8 @@ async def search_research_paper_get(
             final_response = SearchResponse(
                 answer=result.answer,
                 citations=citations_data,
-                confidence_score=result.confidence_score
-                # markdown_content=result.markdown_content  # COMMENTED OUT FOR PERFORMANCE
+                confidence_score=result.confidence_score,
+                markdown_content=result.answer  # Use answer field which has images injected
             )
             
             response = StreamingSearchResponse(
@@ -1004,8 +1006,8 @@ async def search_research_paper_sync(query: str, search_mode: str = "deep"):
         return SearchResponse(
             answer=result.answer,
             citations=citations_data,
-            confidence_score=result.confidence_score
-            # markdown_content=result.markdown_content  # COMMENTED OUT FOR PERFORMANCE
+            confidence_score=result.confidence_score,
+            markdown_content=result.answer  # Use answer field which has images injected
         )
 
     except ValueError as e:

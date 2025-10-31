@@ -12,6 +12,7 @@ from .summarizer_agent import SummarizerAgent
 from .verification_agent import VerificationAgent
 from .reasoning_agent import ReasoningAgent
 from .source_citer_agent import SourceCiterAgent
+from .image_analyzer_agent import ImageAnalyzerAgent
 from .orchestrator import Orchestrator
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     'VerificationAgent',
     'ReasoningAgent',
     'SourceCiterAgent',
+    'ImageAnalyzerAgent',
     'Orchestrator'
 ]
 
