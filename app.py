@@ -177,20 +177,130 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Add Security Middleware (FIRST - before CORS)
+# ============================================================================
+# Security Middleware Configuration
+# ============================================================================
+
+# Import security headers middleware
+from security_middleware import SecurityHeadersMiddleware
+
+# 1. Add Security Headers (FIRST - applies to all responses)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# 2. Add existing Security Middleware (rate limiting, etc.)
 app.add_middleware(SecurityMiddleware)
 
-# Add CORS middleware
+# 3. Request Size Limit Middleware
+@app.middleware("http")
+async def limit_request_size(request: Request, call_next):
+    """Limit request body size to prevent DoS attacks"""
+    if request.method in ["POST", "PUT", "PATCH"]:
+        content_length = request.headers.get("content-length")
+        if content_length:
+            # 10MB limit for request body
+            MAX_REQUEST_SIZE = 10 * 1024 * 1024  # 10MB
+            if int(content_length) > MAX_REQUEST_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Request body too large (max 10MB)"
+                )
+    
+    response = await call_next(request)
+    return response
+
+# 4. HTTPS Redirect (production only)
+if os.getenv("ENV") == "production":
+    from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
+    app.add_middleware(HTTPSRedirectMiddleware)
+    print("✅ HTTPS redirect enabled (production mode)")
+
+# ============================================================================
+# CORS Configuration
+# ============================================================================
+
+# CORS Configuration - Security Fix
+# Get allowed origins from environment variable (comma-separated list)
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "").split(",")
+# Filter out empty strings and strip whitespace
+ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS if origin.strip()]
+
+# Development fallback
+if not ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    print("⚠️  WARNING: Using development CORS settings (localhost only)")
+    print("   Set ALLOWED_ORIGINS environment variable for production")
+else:
+    print(f"✅ CORS configured for: {', '.join(ALLOWED_ORIGINS)}")
+
+# Add CORS middleware with restricted origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure this for production
+    allow_origins=ALLOWED_ORIGINS,  # ✅ Whitelist specific domains only
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],  # ✅ Limit to required methods
+    allow_headers=["Authorization", "Content-Type", "Accept"],  # ✅ Limit to required headers
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
 # Global orchestrator instance
 orchestrator = Orchestrator()
+
+# ============================================================================
+# Global Error Handlers
+# ============================================================================
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    Global exception handler to prevent sensitive data leakage
+    """
+    import logging
+    import traceback
+    
+    # Log full error server-side with stack trace
+    logger = logging.getLogger("error")
+    logger.error(
+        f"Unhandled exception: {exc}",
+        exc_info=True,
+        extra={
+            "path": request.url.path,
+            "method": request.method,
+            "client": request.client.host if request.client else "unknown"
+        }
+    )
+    
+    # Return sanitized error to client
+    if os.getenv("ENV") == "production":
+        # Production: Generic error (don't leak implementation details)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "An internal error occurred. Please try again later.",
+                "type": "internal_error"
+            }
+        )
+    else:
+        # Development: Detailed error for debugging
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": str(exc),
+                "type": type(exc).__name__,
+                "traceback": traceback.format_exc().split("\n")[-10:]  # Last 10 lines only
+            }
+        )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Handle HTTP exceptions with consistent format"""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": exc.detail,
+            "type": "http_error",
+            "status_code": exc.status_code
+        }
+    )
 
 # ============================================================================
 # Application Lifecycle Events
