@@ -59,10 +59,16 @@ from security_middleware import (
 )
 
 # Import performance optimizations
+# REDIS DISABLED - Uncomment below to enable Redis caching
+# from performance_optimization import (
+#     init_redis_cache,
+#     cleanup_redis_cache,
+#     get_redis_cache,
+#     perf_monitor,
+#     hash_query,
+#     normalize_query
+# )
 from performance_optimization import (
-    init_redis_cache,
-    cleanup_redis_cache,
-    get_redis_cache,
     perf_monitor,
     hash_query,
     normalize_query
@@ -184,14 +190,15 @@ async def lifespan(app: FastAPI):
     # Startup
     print("🚀 Starting Omnivionai API...")
     
-    # Initialize Redis cache
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    try:
-        await init_redis_cache(redis_url)
-        print("✅ Redis cache initialized")
-    except Exception as e:
-        print(f"⚠️  Redis cache not available: {e}")
-        print("   System will run without caching (performance may be reduced)")
+    # REDIS DISABLED - Uncomment below to enable Redis caching
+    # # Initialize Redis cache
+    # redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    # try:
+    #     await init_redis_cache(redis_url)
+    #     print("✅ Redis cache initialized")
+    # except Exception as e:
+    #     print(f"⚠️  Redis cache not available: {e}")
+    #     print("   System will run without caching (performance may be reduced)")
     
     print("✅ Omnivionai API ready!")
     
@@ -199,8 +206,9 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     print("🛑 Shutting down Omnivionai API...")
-    await cleanup_redis_cache()
-    print("✅ Redis cache cleaned up")
+    # REDIS DISABLED
+    # await cleanup_redis_cache()
+    print("✅ Cleanup complete")
 
 # Create FastAPI app with lifespan
 app = FastAPI(
@@ -361,7 +369,8 @@ async def root():
     Returns:
         Dict: API metadata including version and endpoint descriptions
     """
-    redis_status = "enabled" if get_redis_cache() and get_redis_cache().enabled else "disabled"
+    # REDIS DISABLED
+    redis_status = "disabled"  # Redis caching is currently disabled
     
     return {
         "message": "Omnivionai API",
@@ -389,13 +398,13 @@ async def health_check():
     Returns:
         Dict: Health status
     """
-    redis_cache = get_redis_cache()
-    redis_healthy = redis_cache and redis_cache.enabled
+    # REDIS DISABLED
+    redis_healthy = False  # Redis is currently disabled
     
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
-        "redis": "healthy" if redis_healthy else "unavailable"
+        "redis": "disabled" if not redis_healthy else "healthy"
     }
 
 @app.get("/metrics")
@@ -647,20 +656,23 @@ async def backend_authoritative_search(
         
         print(f"🔍 Backend-authoritative search: {query} (user: {user_id})")
         
-        # Check Redis cache for duplicate query
-        redis_cache = get_redis_cache()
-        query_hash = hash_query(query)
+        # REDIS DISABLED - Cache checking commented out
+        # # Check Redis cache for duplicate query
+        # redis_cache = get_redis_cache()
+        # query_hash = hash_query(query)
+        # 
+        # if redis_cache and redis_cache.enabled:
+        #     cached_result = await redis_cache.get_search_result(query_hash)
+        #     if cached_result:
+        #         print(f"✅ Cache HIT - returning cached result")
+        #         
+        #         # Track cache hit performance
+        #         duration = time.time() - start_time
+        #         await perf_monitor.track("search_cache_hit", duration)
+        #         
+        #         return JSONResponse(content=cached_result)
         
-        if redis_cache and redis_cache.enabled:
-            cached_result = await redis_cache.get_search_result(query_hash)
-            if cached_result:
-                print(f"✅ Cache HIT - returning cached result")
-                
-                # Track cache hit performance
-                duration = time.time() - start_time
-                await perf_monitor.track("search_cache_hit", duration)
-                
-                return JSONResponse(content=cached_result)
+        query_hash = hash_query(query)  # Still need hash for metadata
         
         # Get user's plan type for token limits
         from subscription_middleware import supabase as sub_supabase
@@ -686,13 +698,14 @@ async def backend_authoritative_search(
         
         print(f"✅ Search completed: {result['search_id']}")
         
-        # Cache the result
-        if redis_cache and redis_cache.enabled and result.get('status') == 'success':
-            await redis_cache.cache_search_result(
-                query_hash,
-                result,
-                ttl=3600  # Cache for 1 hour
-            )
+        # REDIS DISABLED - Cache storage commented out
+        # # Cache the result
+        # if redis_cache and redis_cache.enabled and result.get('status') == 'success':
+        #     await redis_cache.cache_search_result(
+        #         query_hash,
+        #         result,
+        #         ttl=3600  # Cache for 1 hour
+        #     )
         
         # Track performance
         duration = time.time() - start_time
@@ -862,22 +875,24 @@ async def search_research_paper(
         print(f"🔍 Received search request: {request.query.strip()}")
         print(f"🎯 Search mode: {request.search_mode}")
         
-        # Check cache first (before quota check for cached results)
+        # REDIS DISABLED - Cache checking commented out
+        # # Check cache first (before quota check for cached results)
+        # cache_key = f"search:{hash_query(normalize_query(request.query))}:{request.search_mode}"
+        # redis_cache = get_redis_cache()
+        # 
+        # cached_result = await redis_cache.get(cache_key)
+        # if cached_result:
+        #     print(f"✅ Cache HIT - returning cached result (no quota deduction)")
+        #     return JSONResponse(
+        #         content=cached_result,
+        #         headers={
+        #             "X-Cache": "HIT",
+        #             "X-Cache-Key": cache_key[:20] + "..."
+        #         }
+        #     )
+        
         cache_key = f"search:{hash_query(normalize_query(request.query))}:{request.search_mode}"
-        redis_cache = get_redis_cache()
-        
-        cached_result = await redis_cache.get(cache_key)
-        if cached_result:
-            print(f"✅ Cache HIT - returning cached result (no quota deduction)")
-            return JSONResponse(
-                content=cached_result,
-                headers={
-                    "X-Cache": "HIT",
-                    "X-Cache-Key": cache_key[:20] + "..."
-                }
-            )
-        
-        print(f"⚠️ Cache MISS - executing search")
+        print(f"⚠️ Cache MISS - executing search (Redis disabled)")
         
         # Check user quota before processing
         quota_info = await check_user_quota(authorization)
@@ -917,9 +932,10 @@ async def search_research_paper(
             "markdown_content": result.answer  # Use answer field which has images injected
         }
         
-        # Cache the successful result (1 hour TTL)
-        await redis_cache.set(cache_key, response_dict, ttl=3600)
-        print(f"✅ Result cached with key: {cache_key[:30]}...")
+        # REDIS DISABLED - Cache storage commented out
+        # # Cache the successful result (1 hour TTL)
+        # await redis_cache.set(cache_key, response_dict, ttl=3600)
+        # print(f"✅ Result cached with key: {cache_key[:30]}...")
         
         # Return response with quota headers
         return JSONResponse(
