@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Callable, Literal
+from contextlib import asynccontextmanager
 import asyncio
 import uvicorn
 import json
@@ -170,11 +171,43 @@ class StreamingSearchResponse(BaseModel):
     progress: Optional[ProgressUpdate] = None
     result: Optional[SearchResponse] = None
 
-# Create FastAPI app
+# ============================================================================
+# Application Lifecycle Management
+# ============================================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan context manager for startup and shutdown events.
+    Replaces deprecated @app.on_event() decorators.
+    """
+    # Startup
+    print("🚀 Starting Omnivionai API...")
+    
+    # Initialize Redis cache
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    try:
+        await init_redis_cache(redis_url)
+        print("✅ Redis cache initialized")
+    except Exception as e:
+        print(f"⚠️  Redis cache not available: {e}")
+        print("   System will run without caching (performance may be reduced)")
+    
+    print("✅ Omnivionai API ready!")
+    
+    yield  # Application runs here
+    
+    # Shutdown
+    print("🛑 Shutting down Omnivionai API...")
+    await cleanup_redis_cache()
+    print("✅ Redis cache cleaned up")
+
+# Create FastAPI app with lifespan
 app = FastAPI(
     title="Omnivionai API",
     description="Academic Research Paper Generator with Multi-Agent Deep Search",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # ============================================================================
@@ -245,25 +278,12 @@ app.add_middleware(
 # ============================================================================
 # Performance Middleware - GZIP Compression
 # ============================================================================
-from fastapi.middleware.gzip import GZIPMiddleware
-app.add_middleware(GZIPMiddleware, minimum_size=1000)
+from starlette.middleware.gzip import GZipMiddleware
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 print("✅ GZIP compression enabled (70-80% bandwidth reduction)")
 
 # Global orchestrator instance
 orchestrator = Orchestrator()
-
-# Initialize Redis cache on startup
-@app.on_event("startup")
-async def startup_event():
-    """Initialize performance optimizations on startup"""
-    await init_redis_cache()
-    print("✅ Redis cache initialized")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    await cleanup_redis_cache()
-    print("✅ Redis cache cleaned up")
 
 # ============================================================================
 # Global Error Handlers
@@ -323,31 +343,8 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
 
 # ============================================================================
-# Application Lifecycle Events
+# Helper Functions
 # ============================================================================
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize resources on startup."""
-    print("🚀 Starting Omnivionai API...")
-    
-    # Initialize Redis cache (optional)
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    try:
-        await init_redis_cache(redis_url)
-        print("✅ Redis cache initialized")
-    except Exception as e:
-        print(f"⚠️  Redis cache not available: {e}")
-        print("   System will run without caching (performance may be reduced)")
-    
-    print("✅ Omnivionai API ready!")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup resources on shutdown."""
-    print("🛑 Shutting down Omnivionai API...")
-    
-    await cleanup_redis_cache()
     
     print("✅ Cleanup complete")
 
