@@ -142,6 +142,9 @@ Your paper MUST follow this rigorous academic structure with proper markdown for
 ✗ DO NOT ignore contradictions in sources
 ✗ DO NOT fabricate information
 ✗ DO NOT use generic headings like "Main Body"
+✗ DO NOT add meta-commentary or "Notes on formatting" sections
+✗ DO NOT explain your methodology or structural choices
+✗ DO NOT add sections about how you structured the paper
 
 === INPUT DATA ===
 
@@ -199,6 +202,111 @@ BEGIN YOUR PhD-GRADE RESEARCH PAPER NOW:
 
         return '. '.join(enhanced_sentences)
 
+    def _inject_images_into_content(self, answer: str, summaries: List[ProcessedContent]) -> str:
+        """
+        Inject relevant images into the research paper at appropriate locations.
+        
+        This method analyzes the content and inserts images near relevant sections
+        based on image context and alt text matching section content.
+        """
+        import re
+        
+        # Collect all images with their metadata
+        all_images = []
+        for i, summary in enumerate(summaries, 1):
+            if hasattr(summary.source, 'images') and summary.source.images:
+                for img in summary.source.images:
+                    all_images.append({
+                        'url': img.get('url', ''),
+                        'alt': img.get('alt', ''),
+                        'title': img.get('title', ''),
+                        'context': img.get('context', ''),
+                        'ai_description': img.get('ai_description', ''),  # AI-generated description
+                        'relevance_keywords': img.get('relevance_keywords', []),  # AI-generated keywords
+                        'citation_num': i,
+                        'source_title': summary.source.title
+                    })
+        
+        if not all_images:
+            return answer
+        
+        # Note: Images are already analyzed - this just limits how many we process for injection
+        # The actual AI analysis limit is controlled in the orchestrator (max 15 images analyzed)
+        
+        print(f"   🖼️  Processing {len(all_images)} images for injection...")
+        
+        # Find all headings and their positions
+        heading_pattern = r'^(#{2,3}\s+.+)$'
+        lines = answer.split('\n')
+        
+        injected_count = 0
+        used_image_urls = set()
+        
+        # Process line by line
+        result_lines = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            result_lines.append(line)
+            
+            # Check if this line is a heading
+            if re.match(heading_pattern, line.strip()):
+                heading_text = line.strip()
+                
+                # Get next few lines for context (up to 300 chars)
+                context_lines = []
+                for j in range(i + 1, min(i + 10, len(lines))):
+                    if re.match(heading_pattern, lines[j].strip()):
+                        break  # Stop at next heading
+                    context_lines.append(lines[j])
+                
+                section_context = ' '.join(context_lines)[:300].lower()
+                heading_lower = heading_text.lower()
+                
+                # Try to find a relevant image (but don't require one for every chapter)
+                for img in all_images:
+                    if img['url'] in used_image_urls:
+                        continue
+                    
+                    # Prefer images with AI analysis, but allow images without it too
+                    ai_desc = img.get('ai_description', '')
+                    ai_keywords = img.get('relevance_keywords', [])
+                    
+                    # Build searchable text from both AI and original metadata
+                    img_alt = img.get('alt', '')
+                    img_title = img.get('title', '')
+                    img_context = img.get('context', '')
+                    
+                    section_text = f"{heading_lower} {section_context}".lower()
+                    
+                    # Try AI keywords first (preferred)
+                    if ai_keywords:
+                        ai_keywords_lower = [kw.lower().strip() for kw in ai_keywords]
+                        keyword_matches = sum(1 for kw in ai_keywords_lower if kw in section_text)
+                        
+                        # Only place image if there's a good keyword match (at least 1)
+                        # Don't force images into every section
+                        if keyword_matches >= 1:
+                            caption = ai_desc[:80] if ai_desc else (img_alt[:80] if img_alt else 'Research illustration')
+                            image_markdown = f"\n\n![{caption}]({img['url']})"
+                            image_markdown += f"\n*{caption}*"
+                            
+                            # Add the image markdown after this heading
+                            result_lines.append(image_markdown)
+                            result_lines.append("")  # Empty line for spacing
+                            
+                            used_image_urls.add(img['url'])
+                            injected_count += 1
+                            
+                            print(f"   📌 '{heading_text[:60]}...' → Image: {caption[:50]} ({keyword_matches} keywords matched)")
+                            break  # Only one image per section
+            
+            i += 1
+        
+        result = '\n'.join(result_lines)
+        print(f"   ✅ Successfully injected {injected_count} images into content")
+        return result
+
     async def process(self, query: str, summaries: List[ProcessedContent]) -> str:
         """Generate PhD-grade research paper with proper structure"""
 
@@ -233,6 +341,12 @@ BEGIN YOUR PhD-GRADE RESEARCH PAPER NOW:
         
         # Ensure proper academic structure
         enhanced_answer = self._ensure_academic_structure(enhanced_answer)
+        
+        # Remove any meta-commentary or formatting notes
+        enhanced_answer = self._remove_meta_commentary(enhanced_answer)
+        
+        # Inject images into appropriate sections
+        enhanced_answer = self._inject_images_into_content(enhanced_answer, summaries)
 
         print(f"   ✅ Generated comprehensive research paper ({len(enhanced_answer)} characters)")
         return enhanced_answer
@@ -251,6 +365,57 @@ BEGIN YOUR PhD-GRADE RESEARCH PAPER NOW:
             print(f"   ✅ Academic structure verified (Abstract: {has_abstract}, Intro: {has_introduction}, Conclusion: {has_conclusion})")
         else:
             print(f"   ⚠️ Some structural elements may be missing (Abstract: {has_abstract}, Intro: {has_introduction}, Conclusion: {has_conclusion})")
+        
+        return answer
+    
+    def _remove_meta_commentary(self, answer: str) -> str:
+        """Remove AI-generated meta-commentary and formatting notes from the paper"""
+        import re
+        
+        # Patterns that indicate meta-commentary (case-insensitive)
+        meta_patterns = [
+            r'(?i)^#+\s*notes?\s+on\s+formatting.*?(?=^#{1,2}\s|\Z)',  # "Notes on formatting..."
+            r'(?i)^notes?\s+on\s+formatting.*?(?=^#{1,2}\s|\Z)',  # Without heading marker
+            r'(?i)^---\s*$.*?(?:formatting|scope|guidelines|structural).*?(?=^#{1,2}\s|\Z)',  # After horizontal rule
+            r'(?i)he\s+abstract\s+is\s+presented.*?(?=^#{1,2}\s|\Z)',  # Typo patterns (missing T)
+            r'(?i)the\s+abstract\s+is\s+presented.*?(?=^#{1,2}\s|\Z)',  # Full pattern
+            r'(?i)the\s+sources?\s+labeled.*?reflect.*?dataset.*?(?=^#{1,2}\s|\Z)',  # Source labeling notes
+            r'(?i)the\s+paper\s+adheres\s+to.*?(?=^#{1,2}\s|\Z)',  # Adherence notes
+            r'(?i)inline\s+citations.*?correspond\s+to.*?(?=^#{1,2}\s|\Z)',  # Citation explanation
+        ]
+        
+        # Remove content after final horizontal rule if it contains meta-commentary keywords
+        lines = answer.split('\n')
+        final_content = []
+        skip_rest = False
+        last_hr_index = -1
+        
+        # Find last horizontal rule
+        for i, line in enumerate(lines):
+            if line.strip() in ['---', '***', '___']:
+                last_hr_index = i
+        
+        # Check if content after last HR contains meta-commentary
+        if last_hr_index >= 0:
+            after_hr = '\n'.join(lines[last_hr_index:]).lower()
+            meta_keywords = ['notes on', 'formatting', 'scope', 'adheres to', 'structural guidelines', 
+                           'abstract is presented', 'sources labeled', 'inline citations']
+            
+            if any(keyword in after_hr for keyword in meta_keywords):
+                # Remove everything from the last HR onwards
+                answer = '\n'.join(lines[:last_hr_index])
+                print(f"   🧹 Removed meta-commentary section after final horizontal rule")
+        
+        # Apply regex patterns to catch any remaining meta-commentary
+        for pattern in meta_patterns:
+            cleaned = re.sub(pattern, '', answer, flags=re.MULTILINE | re.DOTALL)
+            if cleaned != answer:
+                print(f"   🧹 Removed meta-commentary matching pattern")
+                answer = cleaned
+        
+        # Clean up any trailing whitespace or multiple blank lines
+        answer = re.sub(r'\n{3,}', '\n\n', answer)
+        answer = answer.strip()
         
         return answer
     

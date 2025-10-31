@@ -147,6 +147,66 @@ class ResearchAgent(BaseAgent):
             structure_bonus += 0.05
         if any(indicator in content_lower for indicator in ['however', 'therefore', 'furthermore']):
             structure_bonus += 0.03  # Analytical language
+        
+        # 5.5. Dictionary/definition detection (penalize dictionary-like content)
+        dictionary_indicators = [
+            'plural of', 'present tense', 'past tense', 'third-person singular',
+            'see definitions', 'word of the day', 'thesaurus:', 'synonyms and antonyms',
+            'merriam-webster.com dictionary', 'noun:', 'verb:', 'adjective:', 'adverb:',
+            'etymology:', 'pronunciation:', 'definition:', 'meaning:', 'define:',
+            'part of speech', 'word forms', 'how to say', 'what does', 'mean in',
+            'dictionary entry', 'lexical', 'vocabulary word', 'word origin',
+            'conjugation', 'declension', 'inflection', 'grammatical', 'phonetic',
+            'syllable', 'antonym', 'synonym', 'related words', 'word family'
+        ]
+        dictionary_penalty = 0.0
+        dictionary_matches = sum(1 for indicator in dictionary_indicators if indicator in content_lower)
+        
+        # Also check title for dictionary indicators
+        title_dictionary_indicators = ['dictionary', 'thesaurus', 'define', 'definition', 'meaning of']
+        title_dictionary_match = any(indicator in title_lower for indicator in title_dictionary_indicators)
+        
+        if title_dictionary_match or dictionary_matches >= 3:
+            # Strong dictionary signature - heavily penalize (essentially filter out)
+            dictionary_penalty = -0.9
+            print(f"   🚫 Dictionary/definition content detected ({dictionary_matches} indicators) - applying heavy penalty")
+        elif dictionary_matches >= 1:
+            # Mild dictionary signature - moderate penalty
+            dictionary_penalty = -0.5
+
+        # 5.6. Foreign language detection (penalize non-English content)
+        # Common non-English indicators (French, Spanish, German, etc.)
+        foreign_language_indicators = [
+            # French
+            'auteur:', 'dernière révision:', 'temps de lecture:', 'examinateur:',
+            'anatomie de', 'à travers', 'suffisamment', 'permet d\'',
+            
+            # Spanish
+            'autor:', 'última revisión:', 'tiempo de lectura:',
+            
+            # German
+            'autor:', 'letzte überprüfung:', 'lesezeit:',
+            
+            # General non-English patterns
+            'última', 'através', 'permet', 'permite', 'données',
+            
+            # Check for excessive non-ASCII characters (non-Latin alphabets)
+        ]
+        
+        foreign_penalty = 0.0
+        foreign_matches = sum(1 for indicator in foreign_language_indicators if indicator in content_lower)
+        
+        # Count non-ASCII characters
+        non_ascii_count = sum(1 for char in content if ord(char) > 127)
+        non_ascii_ratio = non_ascii_count / len(content) if len(content) > 0 else 0
+        
+        if foreign_matches >= 2 or non_ascii_ratio > 0.15:
+            # Strong foreign language signature
+            foreign_penalty = -0.8
+            print(f"   🚫 Foreign language content detected - applying penalty")
+        elif foreign_matches >= 1 or non_ascii_ratio > 0.08:
+            # Mild foreign language signature
+            foreign_penalty = -0.4
 
         # 6. TRUST MULTIPLIER - Apply trust scoring to boost trusted sources
         trust_info = TrustedDomains.get_domain_trust_info(url)
@@ -158,11 +218,69 @@ class ResearchAgent(BaseAgent):
             trust_multiplier = 1.0 + (trust_score_normalized * 0.5)  # 1.375 to 1.475 multiplier
             print(f"   ✅ TRUSTED SOURCE: {trust_info['domain']} ({trust_info['category']}) - Trust boost: {trust_multiplier:.2f}x")
 
-        # Combine all factors with trust multiplier
-        final_score = ((base_score * quality_multiplier) + title_section_bonus + diversity_bonus + structure_bonus) * trust_multiplier
+        # Combine all factors with trust multiplier, dictionary penalty, and foreign language penalty
+        final_score = ((base_score * quality_multiplier) + title_section_bonus + diversity_bonus + structure_bonus + dictionary_penalty + foreign_penalty) * trust_multiplier
 
         # Ensure score stays within reasonable bounds
         return min(1.0, max(0.0, final_score))
+
+    # COMMENTED OUT: AI relevance check was using too many tokens and slowing down searches
+    # async def _verify_source_relevance(self, source: SourceMetadata, query: str, main_topic: str) -> bool:
+    #     """
+    #     Use AI to verify if a source is actually relevant to the user's query.
+    #     
+    #     This method helps filter out completely irrelevant sources that might have
+    #     high keyword scores but don't actually relate to the search topic.
+    #     
+    #     Args:
+    #         source: The source to verify
+    #         query: Original user query
+    #         main_topic: Main topic extracted from query
+    #         
+    #     Returns:
+    #         bool: True if source is relevant, False otherwise
+    #     """
+    #     if not Config.ENABLE_AI_RELEVANCE_CHECK:
+    #         return True  # Skip verification if disabled
+    #     
+    #     # Quick check: if source has very high relevance score, trust it
+    #     if source.relevance_score > 0.6:
+    #         return True
+    #     
+    #     # Create a concise verification prompt
+    #     verification_prompt = f"""Is this content relevant to the query about "{main_topic}"?
+    # 
+    # Query: {query}
+    # 
+    # Source Title: {source.title}
+    # Source Section: {source.section}
+    # Content Preview: {source.content[:400]}
+    # 
+    # Answer with ONLY 'YES' or 'NO'. 
+    # - YES if the content is directly related to {main_topic}
+    # - NO if it's about something completely different (dictionaries, unrelated topics, off-topic content)
+    # 
+    # Answer:"""
+    # 
+    #     try:
+    #         from langchain_core.prompts import PromptTemplate
+    #         prompt = PromptTemplate(input_variables=["text"], template="{text}")
+    #         chain = prompt | self.llm
+    #         result = await chain.ainvoke({"text": verification_prompt})
+    #         
+    #         response = result.content if hasattr(result, 'content') else str(result)
+    #         response_clean = response.strip().upper()
+    #         
+    #         is_relevant = 'YES' in response_clean
+    #         
+    #         if not is_relevant:
+    #             print(f"   🚫 AI filtered out irrelevant source: {source.title[:50]}...")
+    #         
+    #         return is_relevant
+    #         
+    #     except Exception as e:
+    #         print(f"   ⚠️ AI relevance check failed: {e}, including source by default")
+    #         return True  # On error, include the source
 
     def search_web(self, query: str, max_results: int = 5) -> List[Dict]:
         """
@@ -205,6 +323,95 @@ class ResearchAgent(BaseAgent):
                 print(f"Fallback search also failed: {e2}")
                 return []
 
+    def _extract_images_from_page(self, soup: BeautifulSoup, base_url: str, keywords: List[str]) -> List[dict]:
+        """
+        Extract relevant images from a web page.
+        
+        Args:
+            soup: BeautifulSoup object of the page
+            base_url: Base URL for resolving relative image URLs
+            keywords: Keywords to match against image alt text and context
+            
+        Returns:
+            List of dicts containing image url, alt text, and context
+        """
+        from urllib.parse import urljoin, urlparse
+        
+        images = []
+        img_tags = soup.find_all('img')
+        
+        # Pre-filter only the most obvious non-content images (relaxed filtering)
+        skip_url_patterns = [
+            'logo', 'icon', 'avatar', 'badge', 'button', 
+            'pixel', 'tracker', 'spacer', '1x1'
+        ]
+        
+        for img in img_tags[:20]:  # Check more images
+            try:
+                # Get image URL
+                img_url = img.get('src') or img.get('data-src')
+                if not img_url:
+                    continue
+                
+                # Skip only very obvious non-content images in URL
+                url_lower = img_url.lower()
+                if any(pattern in url_lower for pattern in skip_url_patterns):
+                    continue
+                
+                # Skip only tiny images (likely icons) - reduced threshold
+                width = img.get('width')
+                height = img.get('height')
+                if width and height:
+                    try:
+                        w, h = int(width), int(height)
+                        # Only skip very small images (relaxed from 150 to 80)
+                        if w < 80 or h < 80:
+                            continue
+                    except ValueError:
+                        pass
+                
+                # Convert relative URLs to absolute
+                img_url = urljoin(base_url, img_url)
+                
+                # Skip data URLs and invalid schemes
+                parsed = urlparse(img_url)
+                if parsed.scheme not in ['http', 'https']:
+                    continue
+                
+                # Get alt text and surrounding context
+                alt_text = img.get('alt', '')
+                title = img.get('title', '')
+                
+                # Get context from parent elements
+                context = ""
+                parent = img.find_parent(['figure', 'div', 'p'])
+                if parent:
+                    figcaption = parent.find('figcaption')
+                    if figcaption:
+                        context = figcaption.get_text(strip=True)
+                    elif parent.get_text():
+                        context = parent.get_text(strip=True)[:200]
+                
+                # More lenient: Accept images with ANY metadata OR any keyword match
+                search_text = f"{alt_text} {title} {context}".lower()
+                keyword_matches = sum(1 for kw in keywords if kw.lower() in search_text)
+                has_metadata = bool(alt_text or title or context)
+                
+                # Accept if: has any metadata OR has any keyword match OR just take first few images
+                if has_metadata or keyword_matches > 0 or len(images) < 5:
+                    images.append({
+                        'url': img_url,
+                        'alt': alt_text,
+                        'title': title,
+                        'context': context[:200] if context else ""
+                    })
+                    
+            except Exception as e:
+                print(f"   ⚠️ Error extracting image: {e}")
+                continue
+        
+        return images[:10]  # Limit final count to 10 best images
+
     def extract_content_with_sections(self, url: str, keywords: List[str]) -> List[SourceMetadata]:
         """
         Extract structured content from a URL with section-level tracking.
@@ -223,6 +430,7 @@ class ResearchAgent(BaseAgent):
                 - Content text
                 - Relevance score
                 - Trust information from TrustedDomains
+                - Images extracted from the page
                 
         Note:
             Handles HTTP errors gracefully, returning empty list on failure.
@@ -238,6 +446,11 @@ class ResearchAgent(BaseAgent):
             # Extract title
             title = soup.find('title')
             title_text = title.text if title else "Untitled"
+            
+            # Extract images from the entire page once
+            page_images = self._extract_images_from_page(soup, url, keywords)
+            if page_images:
+                print(f"   🖼️  Extracted {len(page_images)} relevant images from page")
 
             # Extract content by sections
             for idx, heading in enumerate(soup.find_all(['h1', 'h2', 'h3', 'h4'])):
@@ -258,9 +471,14 @@ class ResearchAgent(BaseAgent):
                 has_partial_match = any(any(part in content.lower() for part in kw.lower().split()) for kw in keywords)
                 is_substantial = len(content.strip()) > 100
                 
-                if content and (is_substantial or has_keyword_match or has_partial_match):
+                # More strict: require at least partial keyword match OR be substantial with high relevance
+                if content and (has_keyword_match or (is_substantial and has_partial_match)):
                     # Calculate enhanced relevance score with trust
                     relevance = self._calculate_advanced_relevance_score(content, keywords, section_name, title_text, url)
+
+                    # Skip very low relevance content early
+                    if relevance < Config.MIN_RELEVANCE_SCORE * 0.7:  # Allow slightly lower during extraction
+                        continue
 
                     # Get trust information
                     trust_info = TrustedDomains.get_domain_trust_info(url)
@@ -279,7 +497,8 @@ class ResearchAgent(BaseAgent):
                         trust_score=trust_info['trust_score'],
                         is_trusted=trust_info['is_trusted'],
                         trust_category=trust_info['category'],
-                        domain=trust_info['domain']
+                        domain=trust_info['domain'],
+                        images=page_images
                     ))
 
             # If no sections found, try to extract main content
@@ -305,7 +524,8 @@ class ResearchAgent(BaseAgent):
                             trust_score=trust_info['trust_score'],
                             is_trusted=trust_info['is_trusted'],
                             trust_category=trust_info['category'],
-                            domain=trust_info['domain']
+                            domain=trust_info['domain'],
+                            images=page_images
                         ))
 
         except Exception as e:
@@ -393,6 +613,11 @@ Example format: ["machine learning agent", "autonomous software", "AI system arc
                     # Extract domain for bias prevention
                     from urllib.parse import urlparse
                     domain = urlparse(url).netloc.lower()
+                    
+                    # Skip blacklisted domains (dictionaries, spam sites, etc.)
+                    if any(blacklisted in domain for blacklisted in Config.BLACKLISTED_DOMAINS):
+                        print(f"   🚫 Skipping blacklisted domain: {domain}")
+                        continue
 
                     # Check trust status
                     is_trusted = TrustedDomains.is_trusted_domain(url)
@@ -450,9 +675,39 @@ Example format: ["machine learning agent", "autonomous software", "AI system arc
         domain_final_counts = {}
         trusted_counts = {}
 
+        # Filter out low-relevance sources before selection
+        print(f"   📊 Filtering sources with relevance >= {Config.MIN_RELEVANCE_SCORE}")
+        filtered_sources = [src for src in unique_sources if src.relevance_score >= Config.MIN_RELEVANCE_SCORE]
+        print(f"   ✅ Kept {len(filtered_sources)} of {len(unique_sources)} sources after relevance filtering")
+
+        # AI-based relevance verification (if enabled)
+        if Config.ENABLE_AI_RELEVANCE_CHECK and filtered_sources:
+            print(f"   🤖 Running AI relevance verification on {len(filtered_sources)} sources...")
+            verified_sources = []
+            
+            # COMMENTED OUT: AI relevance check was using too many tokens and slowing down searches
+            # Verify sources in batches to avoid too many API calls
+            # Only verify non-trusted sources or those with borderline scores
+            # for src in filtered_sources:
+            #     # Trust high-scoring trusted sources automatically
+            #     if src.is_trusted and src.relevance_score > 0.5:
+            #         verified_sources.append(src)
+            #         continue
+            #     
+            #     # Verify others with AI
+            #     is_relevant = await self._verify_source_relevance(src, main_topic, main_topic)
+            #     if is_relevant:
+            #         verified_sources.append(src)
+            # 
+            # filtered_sources = verified_sources
+            # print(f"   ✅ AI verification complete: {len(filtered_sources)} sources passed")
+            
+            # Skip AI verification - use all filtered sources
+            print(f"   ⚡ Skipping AI verification for speed - using {len(filtered_sources)} sources")
+
         # Separate trusted and untrusted sources
-        trusted_sources = [src for src in unique_sources if src.is_trusted]
-        untrusted_sources = [src for src in unique_sources if not src.is_trusted]
+        trusted_sources = [src for src in filtered_sources if src.is_trusted]
+        untrusted_sources = [src for src in filtered_sources if not src.is_trusted]
 
         # Sort each group by relevance score
         trusted_sources.sort(key=lambda x: x.relevance_score, reverse=True)

@@ -29,6 +29,7 @@ class SourceMetadata:
         is_trusted (bool): Whether the source is from a trusted domain
         trust_category (str): Category of trust (e.g., "Academic Source", "Verified Media")
         domain (str): The domain name of the source
+        images (List[dict]): List of images extracted from the source with url, alt text, and context
     """
     url: str
     title: str = ""
@@ -43,6 +44,7 @@ class SourceMetadata:
     is_trusted: bool = False
     trust_category: str = "Unverified Source"
     domain: str = ""
+    images: List[dict] = field(default_factory=list)
 
 
 @dataclass

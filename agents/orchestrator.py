@@ -6,7 +6,7 @@ import asyncio
 import json
 import math
 from datetime import datetime
-from typing import List
+from typing import List, Literal
 import time
 
 from .query_analyzer_agent import QueryAnalyzerAgent
@@ -16,8 +16,12 @@ from .summarizer_agent import SummarizerAgent
 from .verification_agent import VerificationAgent
 from .reasoning_agent import ReasoningAgent
 from .source_citer_agent import SourceCiterAgent
+from .image_analyzer_agent import ImageAnalyzerAgent
 from .data_models import FinalAnswer
 from .config import Config
+
+# Type alias for search modes
+SearchMode = Literal["deep", "moderate", "quick", "sla"]
 
 
 class Orchestrator:
@@ -56,8 +60,9 @@ class Orchestrator:
         self.verification_agent = VerificationAgent()
         self.reasoning_agent = ReasoningAgent()
         self.citer_agent = SourceCiterAgent()
+        self.image_analyzer = ImageAnalyzerAgent()
 
-    async def search(self, query: str, progress_callback=None) -> FinalAnswer:
+    async def search(self, query: str, progress_callback=None, search_mode: SearchMode = "deep") -> FinalAnswer:
         """
         Execute the complete research pipeline for a given query.
         
@@ -70,6 +75,7 @@ class Orchestrator:
             progress_callback (Optional[Callable]): Optional async callback function for
                 progress updates. Called with (step, status, details, progress_percentage,
                 search_queries, sites_visited, sources_found)
+            search_mode (SearchMode): Search mode - "deep", "moderate", "quick", or "sla". Default is "deep"
                 
         Returns:
             FinalAnswer: Complete research result with answer, citations, and markdown content
@@ -79,50 +85,116 @@ class Orchestrator:
             Exception: For other errors during the research process
         """
 
-        print(f"\n🔍 Processing query: {query}\n")
+        print(f"\n🔍 Processing query: {query}")
+        print(f"🎯 Search mode: {search_mode.upper()}")
         print("=" * 50)
+        
+        # Apply search mode configuration
+        mode_config = Config.SEARCH_MODES.get(search_mode, Config.SEARCH_MODES["deep"])
+        print(f"📊 Mode config: {mode_config['description']}")
+        print(f"⚙️  Settings: {mode_config['max_results_per_search']} sources, {mode_config['max_research_iterations']} iterations, {mode_config['request_timeout']}s timeout")
+        
+        # Store mode config for access in _execute_search
+        self._current_mode_config = mode_config
+        
+        # Temporarily override config for this search
+        original_max_results = Config.MAX_RESULTS_PER_SEARCH
+        original_max_content = Config.MAX_CONTENT_LENGTH
+        original_max_iterations = Config.MAX_RESEARCH_ITERATIONS
+        original_enable_iterative = Config.ENABLE_ITERATIVE_RESEARCH
+        original_rate_limit = Config.RATE_LIMIT_DELAY
+        original_request_timeout = Config.REQUEST_TIMEOUT
+        original_max_retries = Config.MAX_RETRIES
+        
+        Config.MAX_RESULTS_PER_SEARCH = mode_config["max_results_per_search"]
+        Config.MAX_CONTENT_LENGTH = mode_config["max_content_length"]
+        Config.MAX_RESEARCH_ITERATIONS = mode_config["max_research_iterations"]
+        Config.ENABLE_ITERATIVE_RESEARCH = mode_config["enable_iterative_research"]
+        Config.RATE_LIMIT_DELAY = mode_config["rate_limit_delay"]
+        Config.REQUEST_TIMEOUT = mode_config["request_timeout"]
+        Config.MAX_RETRIES = mode_config["max_retries"]
+        
+        try:
+            return await self._execute_search(query, progress_callback)
+        finally:
+            # Restore original config
+            Config.MAX_RESULTS_PER_SEARCH = original_max_results
+            Config.MAX_CONTENT_LENGTH = original_max_content
+            Config.MAX_RESEARCH_ITERATIONS = original_max_iterations
+            Config.ENABLE_ITERATIVE_RESEARCH = original_enable_iterative
+            Config.RATE_LIMIT_DELAY = original_rate_limit
+            Config.REQUEST_TIMEOUT = original_request_timeout
+            Config.MAX_RETRIES = original_max_retries
+            self._current_mode_config = None
+    
+    async def _execute_search(self, query: str, progress_callback=None) -> FinalAnswer:
+        """
+        Internal method to execute the search pipeline with current config.
+        
+        Args:
+            query (str): The research question or topic to investigate
+            progress_callback (Optional[Callable]): Optional async callback function for progress updates
+                
+        Returns:
+            FinalAnswer: Complete research result with answer, citations, and markdown content
+        """
         
         start_time = time.time()
         step_times = {}
+        
+        # Get mode config for conditional step execution
+        mode_config = getattr(self, '_current_mode_config', Config.SEARCH_MODES["deep"])
+        skip_validation = mode_config.get("skip_validation", False)
+        skip_verification = mode_config.get("skip_verification", False)
+        skip_reasoning = mode_config.get("skip_reasoning", False)
 
         # Helper function to emit progress
         async def emit_progress(step: str, status: str, details: str, progress: float, search_queries: List[str] = None, sites_visited: List[str] = None, sources_found: int = None):
             if progress_callback:
                 await progress_callback(step, status, details, progress, search_queries, sites_visited, sources_found)
 
-        # Step 0: Validate query
-        print("\n✅ Validating query...")
-        step_start = time.time()
-        await emit_progress("validation", "started", "Validating your query...", 5.0)
-        
-        validation_result = await self.query_validator.validate(query)
-        
-        if not validation_result.get("is_valid", True):
-            error_message = validation_result.get("reason", "Query appears to be invalid")
-            suggestion = validation_result.get("suggestion")
+        # Step 0: Validate query (skip in fast modes)
+        if not skip_validation:
+            print("\n✅ Validating query...")
+            step_start = time.time()
+            await emit_progress("validation", "started", "Validating your query...", 5.0)
             
-            print(f"   ❌ Invalid query: {error_message}")
-            if suggestion:
-                print(f"   💡 Suggestion: {suggestion}")
+            validation_result = await self.query_validator.validate(query)
             
-            await emit_progress("validation", "failed", error_message, 5.0)
+            if not validation_result.get("is_valid", True):
+                error_message = validation_result.get("reason", "Query appears to be invalid")
+                suggestion = validation_result.get("suggestion")
+                
+                print(f"   ❌ Invalid query: {error_message}")
+                if suggestion:
+                    print(f"   💡 Suggestion: {suggestion}")
+                
+                await emit_progress("validation", "failed", error_message, 5.0)
+                
+                # Raise an exception that will be caught by the API
+                raise ValueError(f"{error_message}. {suggestion if suggestion else 'Please try a different query.'}")
             
-            # Raise an exception that will be caught by the API
-            raise ValueError(f"{error_message}. {suggestion if suggestion else 'Please try a different query.'}")
-        
-        print(f"   ✓ Query is valid")
-        step_times["validation"] = time.time() - step_start
-        await emit_progress("validation", "completed", "Query validated successfully", 10.0)
+            print(f"   ✓ Query is valid")
+            step_times["validation"] = time.time() - step_start
+            await emit_progress("validation", "completed", "Query validated successfully", 10.0)
+        else:
+            print("\n⚡ Skipping validation for fast mode")
+            step_times["validation"] = 0.0
 
         # Step 1: Analyze query with web search context
         print("\n📊 Analyzing query with web search...")
         step_start = time.time()
         await emit_progress("query_analysis", "started", "Searching the web and analyzing your query...", 15.0)
         
+        # Get max search queries from mode config
+        max_search_queries = mode_config.get("max_search_queries", 5)
+        
         # The query analyzer now performs web search first, then generates search terms based on results
-        query_analysis = await self.query_analyzer.process(query)
+        # Pass max_questions to limit generation upfront for fast modes
+        query_analysis = await self.query_analyzer.process(query, max_questions=max_search_queries)
+        
         print(f"   Main topic: {query_analysis.get('main_topic')}")
-        print(f"   Search terms (web-informed): {query_analysis.get('search_terms')}")
+        print(f"   Search terms: {query_analysis.get('search_terms')} (requested max: {max_search_queries})")
         
         # Report the search terms to the user
         search_terms = query_analysis.get('search_terms', [])
@@ -132,9 +204,9 @@ class Orchestrator:
                 await progress_callback(
                     "query_analysis", 
                     "completed", 
-                    "Generated research questions based on web search results", 
+                    f"Generated {len(search_terms)} research question{'s' if len(search_terms) > 1 else ''}", 
                     25.0,
-                    search_queries=search_terms[:5],  # Send as list of questions
+                    search_queries=search_terms,  # Send as list of questions
                     sites_visited=[],
                     sources_found=0
                 )
@@ -207,6 +279,57 @@ class Orchestrator:
                 confidence_score=0.0
             )
 
+        # Step 2.5: Analyze images with AI for better placement
+        print("\n🖼️  Analyzing images...")
+        step_start = time.time()
+        await emit_progress("image_analysis", "started", "Analyzing images with AI for contextual placement...", 42.0)
+        
+        # Collect all images from sources
+        all_images = []
+        for source in sources:
+            if hasattr(source, 'images') and source.images:
+                all_images.extend(source.images)
+        
+        if all_images:
+            # Remove duplicates based on URL
+            unique_images = []
+            seen_urls = set()
+            for img in all_images:
+                if img.get('url') and img['url'] not in seen_urls:
+                    seen_urls.add(img['url'])
+                    unique_images.append(img)
+            
+            # Limit to max 15 images for AI analysis
+            max_analyze = 15
+            if len(unique_images) > max_analyze:
+                print(f"   Found {len(unique_images)} unique images, limiting to {max_analyze} for AI analysis")
+                unique_images = unique_images[:max_analyze]
+            else:
+                print(f"   Found {len(unique_images)} unique images to analyze")
+            
+            # Analyze images with AI
+            main_topic = query_analysis.get('main_topic', query)
+            analyzed_images = await self.image_analyzer.analyze_images(unique_images, query, main_topic)
+            
+            # Update sources with analyzed images
+            for source in sources:
+                if hasattr(source, 'images') and source.images:
+                    # Replace with analyzed versions
+                    enhanced_imgs = []
+                    for img in source.images:
+                        # Find the analyzed version
+                        analyzed = next((ai for ai in analyzed_images if ai.get('url') == img.get('url')), None)
+                        enhanced_imgs.append(analyzed if analyzed else img)
+                    source.images = enhanced_imgs
+            
+            await emit_progress("image_analysis", "completed", f"Analyzed {len(analyzed_images)} images", 45.0)
+            print(f"   ✅ Image analysis complete")
+        else:
+            await emit_progress("image_analysis", "completed", "No images found in sources", 45.0)
+            print(f"   ℹ️  No images found to analyze")
+        
+        step_times["image_analysis"] = time.time() - step_start
+
         # Step 3: Summarize
         print("\n📝 Summarizing content...")
         step_start = time.time()
@@ -238,64 +361,98 @@ class Orchestrator:
         
         step_times["summarization"] = time.time() - step_start
 
-        # Step 4: Verify claims
-        print("\n🔍 Verifying claims...")
-        step_start = time.time()
-        await emit_progress(
-            "verification", 
-            "started", 
-            "Cross-checking facts and verifying accuracy...", 
-            70.0,
-            search_queries=None,
-            sites_visited=None,
-            sources_found=len(summaries)
-        )
-        
-        verified_summaries = await self.verification_agent.verify_claims(summaries)
-        
-        # Safety check: ensure we have sources to work with
-        if not verified_summaries:
-            print("   ⚠️  No sources passed verification, using original summaries with reduced confidence...")
-            verified_summaries = summaries[:min(5, len(summaries))]  # Take top 5 summaries
-            for summary in verified_summaries:
-                summary.confidence_score *= 0.5  # Reduce confidence but proceed
-        
-        await emit_progress(
-            "verification", 
-            "completed", 
-            f"Verified {len(verified_summaries)} high-quality sources", 
-            80.0,
-            search_queries=None,
-            sites_visited=None,
-            sources_found=len(verified_summaries)
-        )
-        
-        step_times["verification"] = time.time() - step_start
+        # Step 4: Verify claims (skip in fast modes)
+        if not skip_verification:
+            print("\n🔍 Verifying claims...")
+            step_start = time.time()
+            await emit_progress(
+                "verification", 
+                "started", 
+                "Cross-checking facts and verifying accuracy...", 
+                70.0,
+                search_queries=None,
+                sites_visited=None,
+                sources_found=len(summaries)
+            )
+            
+            verified_summaries = await self.verification_agent.verify_claims(summaries)
+            
+            # Safety check: ensure we have sources to work with
+            if not verified_summaries:
+                print("   ⚠️  No sources passed verification, using original summaries with reduced confidence...")
+                verified_summaries = summaries[:min(5, len(summaries))]  # Take top 5 summaries
+                for summary in verified_summaries:
+                    summary.confidence_score *= 0.5  # Reduce confidence but proceed
+            
+            await emit_progress(
+                "verification", 
+                "completed", 
+                f"Verified {len(verified_summaries)} high-quality sources", 
+                80.0,
+                search_queries=None,
+                sites_visited=None,
+                sources_found=len(verified_summaries)
+            )
+            
+            step_times["verification"] = time.time() - step_start
+        else:
+            print("\n⚡ Skipping verification for fast mode")
+            verified_summaries = summaries
+            step_times["verification"] = 0.0
 
-        # Step 5: Reason and synthesize into PhD-grade research paper
-        print("\n🧠 Generating PhD-grade research paper...")
+        # Step 5: Reason and synthesize (skip reasoning in fast modes, use simple synthesis)
+        print("\n🧠 Generating research paper...")
         step_start = time.time()
-        await emit_progress(
-            "synthesis", 
-            "started", 
-            "Synthesizing comprehensive research paper with abstract, introduction, chapters, and conclusion...", 
-            85.0,
-            search_queries=None,
-            sites_visited=None,
-            sources_found=len(verified_summaries)
-        )
         
-        answer = await self.reasoning_agent.process(query, verified_summaries)
-        
-        await emit_progress(
-            "synthesis", 
-            "completed", 
-            "PhD-grade research paper generated with complete structure and citations", 
-            90.0,
-            search_queries=None,
-            sites_visited=None,
-            sources_found=len(verified_summaries)
-        )
+        if not skip_reasoning:
+            await emit_progress(
+                "synthesis", 
+                "started", 
+                "Synthesizing comprehensive research paper with abstract, introduction, chapters, and conclusion...", 
+                85.0,
+                search_queries=None,
+                sites_visited=None,
+                sources_found=len(verified_summaries)
+            )
+            
+            answer = await self.reasoning_agent.process(query, verified_summaries)
+            
+            await emit_progress(
+                "synthesis", 
+                "completed", 
+                "PhD-grade research paper generated with complete structure and citations", 
+                90.0,
+                search_queries=None,
+                sites_visited=None,
+                sources_found=len(verified_summaries)
+            )
+        else:
+            # Fast mode: Simple direct synthesis without reasoning
+            await emit_progress(
+                "synthesis", 
+                "started", 
+                "Generating quick answer from sources...", 
+                85.0,
+                search_queries=None,
+                sites_visited=None,
+                sources_found=len(verified_summaries)
+            )
+            
+            # Create a simple concatenated answer from summaries
+            answer = f"# {query}\n\n"
+            for i, summary in enumerate(verified_summaries[:3], 1):  # Limit to top 3 in fast mode
+                # ProcessedContent has .summary attribute, not .content
+                answer += f"{summary.summary}\n\n"
+            
+            await emit_progress(
+                "synthesis", 
+                "completed", 
+                "Quick answer generated from sources", 
+                90.0,
+                search_queries=None,
+                sites_visited=None,
+                sources_found=len(verified_summaries)
+            )
         
         step_times["synthesis"] = time.time() - step_start
 

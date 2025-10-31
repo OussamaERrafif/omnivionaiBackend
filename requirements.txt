@@ -10,4 +10,11 @@ python-dotenv>=1.0.0
 requests
 beautifulsoup4
 ddgs
+bleach>=6.0.0
+python-multipart
+
+# Performance & Scalability (Optional)
+redis>=5.0.0  # Redis cache for performance
+aiofiles>=23.0.0  # Async file operations
+orjson>=3.9.0  # Faster JSON serialization
 
