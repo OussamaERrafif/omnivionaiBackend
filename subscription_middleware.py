@@ -14,39 +14,31 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 supabase: Optional[Client] = None
 
+# ✅ SECURITY FIX: Removed sensitive credential logging
 print("\n" + "="*70)
 print("🔧 SUPABASE SUBSCRIPTION MIDDLEWARE INITIALIZATION")
 print("="*70)
-print(f"📍 SUPABASE_URL: {'✅ Found' if SUPABASE_URL else '❌ Not found'}")
-if SUPABASE_URL:
-    # Show first 20 chars for debugging (don't expose full URL)
-    print(f"   Value: {SUPABASE_URL[:50]}...")
-else:
-    print("   ⚠️  Environment variable 'SUPABASE_URL' is empty or not set")
-
-print(f"🔑 SUPABASE_SERVICE_ROLE_KEY: {'✅ Found' if SUPABASE_SERVICE_ROLE_KEY else '❌ Not found'}")
-if SUPABASE_SERVICE_ROLE_KEY:
-    # Show first/last 10 chars only for security
-    print(f"   Value: {SUPABASE_SERVICE_ROLE_KEY[:15]}...{SUPABASE_SERVICE_ROLE_KEY[-10:]}")
-else:
-    print("   ⚠️  Environment variable 'SUPABASE_SERVICE_ROLE_KEY' is empty or not set")
+print(f"📍 SUPABASE_URL: {'✅ Configured' if SUPABASE_URL else '❌ Not configured'}")
+print(f"🔑 SUPABASE_SERVICE_ROLE_KEY: {'✅ Configured' if SUPABASE_SERVICE_ROLE_KEY else '❌ Not configured'}")
 
 if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-        print("\n✅ SUCCESS: Supabase client initialized for subscription management")
+        print("✅ SUCCESS: Supabase client initialized for subscription management")
         print("   Quota checking: ENABLED")
     except Exception as e:
-        print(f"\n❌ ERROR: Failed to initialize Supabase client")
-        print(f"   Error details: {str(e)}")
+        print(f"❌ ERROR: Failed to initialize Supabase client")
         print(f"   Error type: {type(e).__name__}")
+        # Only show detailed error in development
+        if os.getenv("ENV") == "development":
+            print(f"   Error details: {str(e)}")
         supabase = None
 else:
-    print("\n⚠️  WARNING: Supabase credentials incomplete - quota checking DISABLED")
+    print("⚠️  WARNING: Supabase credentials incomplete - quota checking DISABLED")
     print("   Add these to your .env file:")
     print("   SUPABASE_URL=https://your-project.supabase.co")
     print("   SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here")
-    print("\n   Running in DEVELOPMENT MODE (all searches allowed)")
+    print("   Running in DEVELOPMENT MODE (all searches allowed)")
     
 print("="*70 + "\n")
 
