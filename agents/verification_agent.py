@@ -109,6 +109,8 @@ Analyze the claim against the source and respond with your single-word verdict n
         """
         Verify all claims in summaries against their source content.
         
+        OPTIMIZED: Uses parallel LLM calls for faster verification.
+        
         Processes each summary to verify that its claims are supported by the
         source content. Adjusts confidence scores based on verification results:
         - VERIFIED: Full confidence (1.0x multiplier)
@@ -127,13 +129,15 @@ Analyze the claim against the source and respond with your single-word verdict n
                                    Only includes summaries above confidence threshold (0.05).
                                    
         Note:
-            - Applies rate limiting between verification calls
+            - OPTIMIZED: Processes verifications in parallel with concurrency limit
             - Continues processing on individual failures (with reduced confidence)
             - Ensures minimum of 3 sources in output for research quality
         """
         verified_summaries = []
 
-        for summary in summaries:
+        # OPTIMIZED: Process all verifications in parallel
+        async def verify_summary(summary: ProcessedContent) -> ProcessedContent:
+            """Verify a single summary"""
             try:
                 chain = self.prompt | self.llm
                 result = await chain.ainvoke({
@@ -158,15 +162,36 @@ Analyze the claim against the source and respond with your single-word verdict n
 
                 # Only include if confidence is above threshold (lowered threshold)
                 if summary.confidence_score > 0.05:  # Lowered from 0.1 to 0.05
-                    verified_summaries.append(summary)
-
-                await asyncio.sleep(Config.RATE_LIMIT_DELAY)
+                    return summary
+                return None
 
             except Exception as e:
                 print(f"Verification error: {e}")
                 # Include with slightly reduced confidence if verification fails
                 summary.confidence_score *= 0.85  # Less penalty for verification failures
-                verified_summaries.append(summary)
+                return summary
+
+        # OPTIMIZED: Use semaphore to limit concurrent LLM calls
+        semaphore = asyncio.Semaphore(Config.MAX_CONCURRENT_LLM_CALLS)
+        
+        async def bounded_verify(summary):
+            async with semaphore:
+                result = await verify_summary(summary)
+                # OPTIMIZED: Minimal delay only between batches
+                await asyncio.sleep(Config.RATE_LIMIT_DELAY)
+                return result
+        
+        # OPTIMIZED: Process all summaries in parallel with concurrency limit
+        print(f"   🚀 Verifying {len(summaries)} summaries in parallel (max {Config.MAX_CONCURRENT_LLM_CALLS} concurrent)...")
+        tasks = [bounded_verify(summary) for summary in summaries]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Collect successful results
+        for result in results:
+            if isinstance(result, ProcessedContent) and result is not None:
+                verified_summaries.append(result)
+            elif isinstance(result, Exception):
+                print(f"Verification task failed: {result}")
 
         print(f"   Verified {len(verified_summaries)}/{len(summaries)} summaries")
         

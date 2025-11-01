@@ -160,6 +160,8 @@ Your paper MUST follow this rigorous academic structure with proper markdown for
 ✗ DO NOT add meta-commentary or "Notes on formatting" sections
 ✗ DO NOT explain your methodology or structural choices
 ✗ DO NOT add sections about how you structured the paper
+✗ DO NOT add a "References" section at the end - citations are already embedded inline [1][2]
+✗ DO NOT create a bibliography, works cited, or reference list section
 
 === INPUT DATA ===
 
@@ -366,6 +368,9 @@ BEGIN YOUR PhD-GRADE RESEARCH PAPER NOW:
         # Remove any meta-commentary or formatting notes
         enhanced_answer = self._remove_meta_commentary(enhanced_answer)
         
+        # Remove any References section that might have been added
+        enhanced_answer = self._remove_references_section(enhanced_answer)
+        
         # Inject images into appropriate sections
         enhanced_answer = self._inject_images_into_content(enhanced_answer, summaries)
 
@@ -386,6 +391,36 @@ BEGIN YOUR PhD-GRADE RESEARCH PAPER NOW:
             print(f"   ✅ Academic structure verified (Abstract: {has_abstract}, Intro: {has_introduction}, Conclusion: {has_conclusion})")
         else:
             print(f"   ⚠️ Some structural elements may be missing (Abstract: {has_abstract}, Intro: {has_introduction}, Conclusion: {has_conclusion})")
+        
+        return answer
+    
+    def _remove_references_section(self, answer: str) -> str:
+        """Remove any References/Bibliography section that was added at the end"""
+        import re
+        
+        # Patterns to match References sections at the end of the document
+        reference_patterns = [
+            # Match "## References" heading and everything after it
+            r'\n##\s+References\s*\n.*$',
+            r'\n###\s+References\s*\n.*$',
+            # Match "References" with various formatting
+            r'\n\*\*References\*\*\s*\n.*$',
+            r'\nReferences\s*\n\s*\[1\].*$',
+            # Match numbered reference lists at the end
+            r'\n\s*\[1\]\s+[^\n]+\n\s*\[2\].*$',
+        ]
+        
+        original_length = len(answer)
+        
+        for pattern in reference_patterns:
+            cleaned = re.sub(pattern, '', answer, flags=re.IGNORECASE | re.DOTALL)
+            if len(cleaned) < original_length:
+                print(f"   🧹 Removed References section from end of paper ({original_length - len(cleaned)} characters removed)")
+                answer = cleaned
+                original_length = len(answer)
+        
+        # Clean up trailing whitespace
+        answer = answer.rstrip()
         
         return answer
     

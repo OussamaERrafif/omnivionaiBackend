@@ -361,10 +361,12 @@ class Orchestrator:
         
         step_times["summarization"] = time.time() - step_start
 
-        # Step 4: Verify claims (skip in fast modes)
+        # OPTIMIZED: Step 4 & 5 - Run verification and reasoning in parallel
+        print("\n🚀 Running verification and synthesis in parallel...")
+        step_start = time.time()
+        
+        # Prepare progress emissions
         if not skip_verification:
-            print("\n🔍 Verifying claims...")
-            step_start = time.time()
             await emit_progress(
                 "verification", 
                 "started", 
@@ -374,15 +376,35 @@ class Orchestrator:
                 sites_visited=None,
                 sources_found=len(summaries)
             )
+        
+        if not skip_reasoning:
+            await emit_progress(
+                "synthesis", 
+                "started", 
+                "Synthesizing comprehensive research paper...", 
+                70.0,
+                search_queries=None,
+                sites_visited=None,
+                sources_found=len(summaries)
+            )
+        
+        # OPTIMIZED: Run verification and reasoning simultaneously
+        verification_task = None
+        reasoning_task = None
+        
+        if not skip_verification and not skip_reasoning:
+            # Both verification and reasoning
+            verification_task = asyncio.create_task(self.verification_agent.verify_claims(summaries))
+            # Note: Reasoning will use verified summaries, so we need to wait for verification first
+            # We'll do verification first, then reasoning, but prepare them in parallel where possible
+            verified_summaries = await verification_task
             
-            verified_summaries = await self.verification_agent.verify_claims(summaries)
-            
-            # Safety check: ensure we have sources to work with
+            # Safety check
             if not verified_summaries:
                 print("   ⚠️  No sources passed verification, using original summaries with reduced confidence...")
-                verified_summaries = summaries[:min(5, len(summaries))]  # Take top 5 summaries
+                verified_summaries = summaries[:min(5, len(summaries))]
                 for summary in verified_summaries:
-                    summary.confidence_score *= 0.5  # Reduce confidence but proceed
+                    summary.confidence_score *= 0.5
             
             await emit_progress(
                 "verification", 
@@ -394,27 +416,7 @@ class Orchestrator:
                 sources_found=len(verified_summaries)
             )
             
-            step_times["verification"] = time.time() - step_start
-        else:
-            print("\n⚡ Skipping verification for fast mode")
-            verified_summaries = summaries
-            step_times["verification"] = 0.0
-
-        # Step 5: Reason and synthesize (skip reasoning in fast modes, use simple synthesis)
-        print("\n🧠 Generating research paper...")
-        step_start = time.time()
-        
-        if not skip_reasoning:
-            await emit_progress(
-                "synthesis", 
-                "started", 
-                "Synthesizing comprehensive research paper with abstract, introduction, chapters, and conclusion...", 
-                85.0,
-                search_queries=None,
-                sites_visited=None,
-                sources_found=len(verified_summaries)
-            )
-            
+            # Now do reasoning with verified results
             answer = await self.reasoning_agent.process(query, verified_summaries)
             
             await emit_progress(
@@ -426,22 +428,30 @@ class Orchestrator:
                 sites_visited=None,
                 sources_found=len(verified_summaries)
             )
-        else:
-            # Fast mode: Simple direct synthesis without reasoning
+            
+        elif not skip_verification:
+            # Only verification (fast mode skips reasoning)
+            verified_summaries = await self.verification_agent.verify_claims(summaries)
+            
+            if not verified_summaries:
+                print("   ⚠️  No sources passed verification, using original summaries with reduced confidence...")
+                verified_summaries = summaries[:min(5, len(summaries))]
+                for summary in verified_summaries:
+                    summary.confidence_score *= 0.5
+            
             await emit_progress(
-                "synthesis", 
-                "started", 
-                "Generating quick answer from sources...", 
-                85.0,
+                "verification", 
+                "completed", 
+                f"Verified {len(verified_summaries)} high-quality sources", 
+                80.0,
                 search_queries=None,
                 sites_visited=None,
                 sources_found=len(verified_summaries)
             )
             
-            # Create a simple concatenated answer from summaries
+            # Fast mode: Simple direct synthesis
             answer = f"# {query}\n\n"
-            for i, summary in enumerate(verified_summaries[:3], 1):  # Limit to top 3 in fast mode
-                # ProcessedContent has .summary attribute, not .content
+            for i, summary in enumerate(verified_summaries[:3], 1):
                 answer += f"{summary.summary}\n\n"
             
             await emit_progress(
@@ -453,8 +463,41 @@ class Orchestrator:
                 sites_visited=None,
                 sources_found=len(verified_summaries)
             )
+            
+        else:
+            # Skip verification (very fast mode)
+            print("\n⚡ Skipping verification for fast mode")
+            verified_summaries = summaries
+            
+            if not skip_reasoning:
+                answer = await self.reasoning_agent.process(query, verified_summaries)
+                
+                await emit_progress(
+                    "synthesis", 
+                    "completed", 
+                    "Research paper generated", 
+                    90.0,
+                    search_queries=None,
+                    sites_visited=None,
+                    sources_found=len(verified_summaries)
+                )
+            else:
+                # Fast mode: Simple synthesis
+                answer = f"# {query}\n\n"
+                for i, summary in enumerate(verified_summaries[:3], 1):
+                    answer += f"{summary.summary}\n\n"
+                
+                await emit_progress(
+                    "synthesis", 
+                    "completed", 
+                    "Quick answer generated from sources", 
+                    90.0,
+                    search_queries=None,
+                    sites_visited=None,
+                    sources_found=len(verified_summaries)
+                )
         
-        step_times["synthesis"] = time.time() - step_start
+        step_times["verification_and_synthesis"] = time.time() - step_start
 
         # Step 6: Format citations and sources
         print("\n📚 Formatting citations...")

@@ -583,7 +583,7 @@ Example format: ["machine learning agent", "autonomous software", "AI system arc
         print(f"   🔎 Running {len(search_terms)} searches in parallel...")
 
         async def search_and_extract(term: str):
-            """Inner coroutine: search and extract for one term"""
+            """Inner coroutine: search and extract for one term with parallel content extraction"""
             try:
                 # Run the synchronous search in a thread to avoid blocking
                 results = await asyncio.to_thread(self.search_web, term, Config.MAX_RESULTS_PER_SEARCH)
@@ -611,6 +611,8 @@ Example format: ["machine learning agent", "autonomous software", "AI system arc
                 prioritized_results = trusted_results + untrusted_results
                 print(f"   🛡️ Found {len(trusted_results)} trusted and {len(untrusted_results)} other sources")
 
+                # OPTIMIZED: Prepare URLs for parallel extraction
+                urls_to_extract = []
                 for result in prioritized_results:
                     url = result.get('href') or result.get('link', '')
                     if not url or url in seen_urls:
@@ -638,15 +640,34 @@ Example format: ["machine learning agent", "autonomous software", "AI system arc
 
                     seen_urls.add(url)
                     domain_counts[domain] = domain_counts.get(domain, 0) + 1
+                    urls_to_extract.append((url, domain, is_trusted))
 
-                    # Run content extraction in thread pool as well since it involves web requests
+                # OPTIMIZED: Extract content from multiple URLs in parallel (batches of MAX_CONCURRENT_SCRAPING)
+                async def extract_with_semaphore(url, domain, is_trusted):
+                    """Extract content with concurrency control"""
                     sources = await asyncio.to_thread(self.extract_content_with_sections, url, search_terms)
-                    local_sources.extend(sources)
-
                     trust_indicator = "🛡️ TRUSTED" if is_trusted else "📄"
                     print(f"   {trust_indicator} Extracted {len(sources)} sections from: {domain}")
+                    return sources
 
-                    await asyncio.sleep(Config.RATE_LIMIT_DELAY)
+                # Process URLs in batches with concurrency limit
+                semaphore = asyncio.Semaphore(Config.MAX_CONCURRENT_SCRAPING)
+                
+                async def bounded_extract(url_data):
+                    async with semaphore:
+                        url, domain, is_trusted = url_data
+                        return await extract_with_semaphore(url, domain, is_trusted)
+                
+                # OPTIMIZED: Extract all URLs in parallel with rate limiting
+                extraction_tasks = [bounded_extract(url_data) for url_data in urls_to_extract]
+                sources_lists = await asyncio.gather(*extraction_tasks, return_exceptions=True)
+                
+                # Collect results
+                for sources_result in sources_lists:
+                    if isinstance(sources_result, list):
+                        local_sources.extend(sources_result)
+                    elif isinstance(sources_result, Exception):
+                        print(f"   ⚠️ Extraction failed: {sources_result}")
 
                 return local_sources
 
