@@ -29,7 +29,7 @@ class Config:
     MODEL_NAME = "gpt-5-nano-2025-08-07"  # Valid OpenAI model
     """str: The OpenAI model name to use for all LLM operations"""
     
-    MAX_RESULTS_PER_SEARCH = 2  # Increased for more comprehensive search
+    MAX_RESULTS_PER_SEARCH = 10  # OPTIMIZED: Increased from 2 to 10 for comprehensive search
     """int: Maximum number of search results to retrieve per search query"""
     
     MAX_CONTENT_LENGTH = 2000  # Increased for better content extraction
@@ -41,9 +41,16 @@ class Config:
     MAX_RETRIES = 3
     """int: Maximum number of retries for failed HTTP requests"""
 
-    # Free tier rate limits (slightly slower for parallel searches)
-    RATE_LIMIT_DELAY = 1.0  # Slightly faster for more sources
+    # OPTIMIZED: Reduced rate limits for faster parallel execution
+    RATE_LIMIT_DELAY = 0.1  # OPTIMIZED: Reduced from 1.0s to 0.1s for faster execution
     """float: Delay in seconds between API calls to respect rate limits"""
+    
+    # OPTIMIZED: Parallel processing configuration
+    MAX_CONCURRENT_SCRAPING = 8  # Maximum concurrent web scraping requests
+    """int: Maximum number of concurrent web scraping operations"""
+    
+    MAX_CONCURRENT_LLM_CALLS = 10  # Maximum concurrent LLM API calls
+    """int: Maximum number of concurrent LLM API calls for summarization/verification"""
 
     # Domain diversity limits - increased for more sources
     MAX_SOURCES_PER_DOMAIN_PER_TERM = 2  # Allow more sources per domain per term
@@ -52,11 +59,11 @@ class Config:
     # Search Mode Configurations
     SEARCH_MODES = {
         "deep": {
-            "max_results_per_search": 5,
+            "max_results_per_search": 10,  # OPTIMIZED: Increased from 5 to 10
             "max_content_length": 3000,
             "max_research_iterations": 3,
-            "enable_iterative_research": True,
-            "rate_limit_delay": 1.0,
+            "enable_iterative_research": False,  # OPTIMIZED: Disabled for faster execution
+            "rate_limit_delay": 0.1,  # OPTIMIZED: Reduced from 1.0 to 0.1
             "request_timeout": 10,
             "max_retries": 3,
             "max_search_queries": 5,
@@ -66,11 +73,11 @@ class Config:
             "description": "Comprehensive deep search with maximum accuracy"
         },
         "moderate": {
-            "max_results_per_search": 3,
+            "max_results_per_search": 10,  # OPTIMIZED: Increased from 3 to 10
             "max_content_length": 2000,
             "max_research_iterations": 2,
-            "enable_iterative_research": True,
-            "rate_limit_delay": 0.5,
+            "enable_iterative_research": False,  # OPTIMIZED: Disabled for faster execution
+            "rate_limit_delay": 0.1,  # OPTIMIZED: Reduced from 0.5 to 0.1
             "request_timeout": 7,
             "max_retries": 2,
             "max_search_queries": 3,
@@ -80,11 +87,11 @@ class Config:
             "description": "Balanced search with good accuracy and speed"
         },
         "quick": {
-            "max_results_per_search": 2,
+            "max_results_per_search": 10,  # OPTIMIZED: Increased from 2 to 10
             "max_content_length": 1200,
             "max_research_iterations": 1,
             "enable_iterative_research": False,
-            "rate_limit_delay": 0.2,
+            "rate_limit_delay": 0.1,  # OPTIMIZED: Reduced from 0.2 to 0.1
             "request_timeout": 5,
             "max_retries": 1,
             "max_search_queries": 2,
@@ -94,7 +101,7 @@ class Config:
             "description": "Fast search for quick answers"
         },
         "sla": {
-            "max_results_per_search": 1,
+            "max_results_per_search": 10,  # OPTIMIZED: Increased from 1 to 10
             "max_content_length": 800,
             "max_research_iterations": 0,
             "enable_iterative_research": False,
@@ -113,14 +120,14 @@ class Config:
     MAX_SOURCES_PER_DOMAIN_FINAL = 5    # Allow more sources per domain in final result
     """int: Maximum sources allowed from same domain in final aggregated results"""
     
-    MAX_TOTAL_SOURCES = 8               # Maximum total sources to analyze (reduced for performance)
+    MAX_TOTAL_SOURCES = 10  # OPTIMIZED: Increased from 8 to 10 for more comprehensive results
     """int: Maximum total number of sources to analyze across all searches"""
     
     # Iterative research settings
     MAX_RESEARCH_ITERATIONS = 2          # Maximum number of research rounds
     """int: Maximum number of iterative research rounds to perform"""
     
-    ENABLE_ITERATIVE_RESEARCH = True     # Enable/disable iterative research
+    ENABLE_ITERATIVE_RESEARCH = False    # OPTIMIZED: Disabled by default for faster execution
     """bool: Whether to enable multi-round iterative research for deeper analysis"""
     
     # Quality filtering settings

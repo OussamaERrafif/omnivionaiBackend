@@ -96,6 +96,8 @@ Provide your summary now (2-3 sentences, factual and relevant):"""
         """
         Summarize multiple sources while preserving all citation metadata.
         
+        OPTIMIZED: Uses parallel LLM calls with batching for faster processing.
+        
         Processes each source to create a concise summary that captures key information
         relevant to the research topic. Each summary is wrapped in ProcessedContent with
         the full source metadata for citation tracking.
@@ -110,16 +112,21 @@ Provide your summary now (2-3 sentences, factual and relevant):"""
                                    
         Note:
             - Skips sources with empty content
-            - Applies rate limiting (Config.RATE_LIMIT_DELAY) between API calls
+            - OPTIMIZED: Processes up to MAX_CONCURRENT_LLM_CALLS in parallel
             - Continues processing on individual failures rather than stopping
             - Preserves source relevance_score as confidence_score
         """
         summaries = []
+        
+        # Filter out sources with no content
+        valid_sources = [source for source in sources if source.content]
+        
+        if not valid_sources:
+            return summaries
 
-        for source in sources:
-            if not source.content:
-                continue
-
+        # OPTIMIZED: Process sources in parallel batches
+        async def summarize_source(source: SourceMetadata) -> ProcessedContent:
+            """Summarize a single source"""
             chain = self.prompt | self.llm
 
             try:
@@ -132,18 +139,38 @@ Provide your summary now (2-3 sentences, factual and relevant):"""
                 # Extract content from the response
                 summary = result.content if hasattr(result, 'content') else str(result)
 
-                summaries.append(ProcessedContent(
+                return ProcessedContent(
                     summary=summary.strip(),
                     source=source,
                     confidence_score=source.relevance_score
-                ))
-
-                # Rate limiting
-                await asyncio.sleep(Config.RATE_LIMIT_DELAY)
+                )
 
             except Exception as e:
-                print(f"Summarization error: {e}")
-                continue
+                print(f"Summarization error for {source.url}: {e}")
+                return None
 
+        # OPTIMIZED: Use semaphore to limit concurrent LLM calls
+        semaphore = asyncio.Semaphore(Config.MAX_CONCURRENT_LLM_CALLS)
+        
+        async def bounded_summarize(source):
+            async with semaphore:
+                result = await summarize_source(source)
+                # OPTIMIZED: Minimal delay only between batches, not between all calls
+                await asyncio.sleep(Config.RATE_LIMIT_DELAY)
+                return result
+        
+        # OPTIMIZED: Process all sources in parallel with concurrency limit
+        print(f"   🚀 Processing {len(valid_sources)} sources in parallel (max {Config.MAX_CONCURRENT_LLM_CALLS} concurrent)...")
+        tasks = [bounded_summarize(source) for source in valid_sources]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Collect successful results
+        for result in results:
+            if isinstance(result, ProcessedContent):
+                summaries.append(result)
+            elif isinstance(result, Exception):
+                print(f"Summarization task failed: {result}")
+
+        print(f"   ✅ Successfully summarized {len(summaries)}/{len(valid_sources)} sources")
         return summaries
 
