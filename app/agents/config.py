@@ -74,7 +74,9 @@ class Config:
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07").strip()
     NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b").strip()
     GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
-    LLM_PROVIDER_ORDER = os.getenv("LLM_PROVIDER_ORDER", "openai,nvidia,groq").strip()
+    # OpenAI is optional. Keep the default path on the configured NVIDIA and
+    # Groq providers so an expired OpenAI key cannot delay or block searches.
+    LLM_PROVIDER_ORDER = os.getenv("LLM_PROVIDER_ORDER", "nvidia,groq").strip()
     LLM_MAX_TOKENS = _positive_int_from_env("LLM_MAX_TOKENS", 4096)
     LLM_TIMEOUT_SECONDS = _positive_float_from_env("LLM_TIMEOUT_SECONDS", 60.0)
 

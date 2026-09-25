@@ -358,6 +358,12 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
+def client_search_error(error: Exception) -> str:
+    """Return a useful search error without exposing provider credentials."""
+    if "All configured LLM providers failed" in str(error):
+        return "Search could not be completed because the AI providers are temporarily unavailable. Please try again shortly."
+    return "Search could not be completed. Please try again shortly."
     
     print("✅ Cleanup complete")
 
@@ -753,7 +759,7 @@ async def backend_authoritative_search(
         print(f"❌ Search error: {str(e)}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=client_search_error(e))
 
 
 @app.get("/api/search/stream")
@@ -981,7 +987,7 @@ async def search_research_paper(
         print(f"❌ Search error: {str(e)}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=client_search_error(e))
 
 @app.get("/search/{query}")
 async def search_research_paper_get(
@@ -1143,7 +1149,7 @@ async def search_research_paper_get(
             # Send error as final message
             error_response = StreamingSearchResponse(
                 type="error",
-                data={"error": f"Search failed: {str(e)}"}
+                data={"error": client_search_error(e)}
             )
             yield f"data: {error_response.model_dump_json()}\n\n"
 
@@ -1213,7 +1219,7 @@ async def search_research_paper_sync(query: str, search_mode: str = "deep"):
         # Handle validation errors (invalid query)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=client_search_error(e))
 
 
 # ==================== SUBSCRIPTION & QUOTA ENDPOINTS (Privacy-Enhanced) ====================
