@@ -30,8 +30,10 @@ import json
 import asyncio
 import datetime
 
-# Import from agents package
-from app.agents import Orchestrator, Config
+# Import concrete modules instead of relying on package re-exports. This keeps
+# the FastAPI entrypoint importable in Vercel's Python runtime.
+from app.agents.config import Config
+from app.agents.orchestrator import Orchestrator
 
 # Trusted domains system
 from app.core.trusted_domains import TrustedDomains
