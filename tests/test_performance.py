@@ -11,10 +11,10 @@ from datetime import datetime
 # Import the orchestrator and config
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agents.orchestrator import Orchestrator
-from agents.config import Config
+from app.agents.orchestrator import Orchestrator
+from app.agents.config import Config
 
 
 class PerformanceTracker:

@@ -178,7 +178,7 @@ Analyze the claim against the source and respond with your single-word verdict n
             async with semaphore:
                 result = await verify_summary(summary)
                 # OPTIMIZED: Minimal delay only between batches
-                await asyncio.sleep(Config.RATE_LIMIT_DELAY)
+                await asyncio.sleep(self.settings.rate_limit_delay)
                 return result
         
         # OPTIMIZED: Process all summaries in parallel with concurrency limit

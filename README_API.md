@@ -23,7 +23,7 @@ A FastAPI-based REST API for the AI Deep Search system - Academic Research Paper
 ### Prerequisites
 
 - Python 3.11+ installed
-- OpenAI API key (required)
+- At least one LLM provider key: OpenAI, NVIDIA, or Groq
 - Supabase account (optional, for auth features)
 
 ### Setup Steps
@@ -37,12 +37,16 @@ A FastAPI-based REST API for the AI Deep Search system - Academic Research Paper
 2. **Set up environment variables**:
    Create a `.env` file in the Backend directory:
    ```bash
+   # Providers are tried in order when a request fails
+   LLM_PROVIDER_ORDER=openai,nvidia,groq
    OPENAI_API_KEY=your-openai-api-key-here
+   NVIDIA_API_KEY=your-nvidia-api-key-here
+   GROQ_API_KEY=your-groq-api-key-here
    SUPABASE_URL=your-supabase-url
    SUPABASE_ANON_KEY=your-supabase-anon-key
    ```
    
-   Get your OpenAI API key from: https://platform.openai.com/api-keys
+   Configure whichever provider keys you intend to use. Never commit the `.env` file.
 
 ## Usage
 
@@ -258,8 +262,11 @@ The API is designed to work with the React frontend in the `../frontend/` direct
 
 The API uses the configuration from `agents/config.py`. Key settings:
 
-**API Keys:**
-- `OPENAI_API_KEY`: Required for LLM operations
+**LLM providers:**
+- `OPENAI_API_KEY`: OpenAI provider (optional when NVIDIA or Groq is configured)
+- `NVIDIA_API_KEY`: NVIDIA provider, using `nvidia/nemotron-3-super-120b-a12b` by default
+- `GROQ_API_KEY`: Groq provider, using `llama-3.3-70b-versatile` by default
+- `LLM_PROVIDER_ORDER`: Provider preference and automatic failover order (default: `openai,nvidia,groq`)
 - `SUPABASE_URL`: Optional, for authentication
 - `SUPABASE_ANON_KEY`: Optional, for authentication
 
@@ -374,9 +381,9 @@ logging.basicConfig(
 
 ### Common Issues
 
-**"OpenAI API Key not found"**
-- Ensure `.env` file exists with correct key
-- Check environment variable is loaded: `echo $OPENAI_API_KEY`
+**"No LLM provider is configured"**
+- Ensure `.env` contains at least one of `OPENAI_API_KEY`, `NVIDIA_API_KEY`, or `GROQ_API_KEY`
+- Confirm the selected provider is included in `LLM_PROVIDER_ORDER`
 
 **"Port already in use"**
 - Change port: `uvicorn api:app --port 8001`

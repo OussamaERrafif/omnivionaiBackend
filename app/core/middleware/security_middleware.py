@@ -378,7 +378,7 @@ class SecurityHeadersMiddleware:
 
 
 # Import auth decorators from auth_utils for convenience
-from auth_utils import require_auth, optional_auth
+from app.core.auth_utils import require_auth, optional_auth
 
 # Global instances
 webhook_idempotency = WebhookIdempotency()

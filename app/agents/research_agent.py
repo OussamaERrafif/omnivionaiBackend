@@ -13,7 +13,7 @@ from langchain_core.prompts import PromptTemplate
 from langchain_community.utilities import DuckDuckGoSearchAPIWrapper
 from urllib.parse import urlparse
 
-from trusted_domains import TrustedDomains
+from app.core.trusted_domains import TrustedDomains
 
 from .base_agent import BaseAgent
 from .config import Config
@@ -440,7 +440,7 @@ class ResearchAgent(BaseAgent):
         soup = None  # Initialize to None for cleanup
 
         try:
-            response = self.session.get(url, timeout=Config.REQUEST_TIMEOUT)
+            response = self.session.get(url, timeout=self.settings.request_timeout)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
 
@@ -492,7 +492,7 @@ class ResearchAgent(BaseAgent):
                         title=title_text,
                         section=section_name,
                         paragraph_id=para_id,
-                        content=content[:Config.MAX_CONTENT_LENGTH],
+                        content=content[:self.settings.max_content_length],
                         relevance_score=relevance,
                         trust_flag=trust_info['trust_flag'],
                         trust_score=trust_info['trust_score'],
@@ -519,7 +519,7 @@ class ResearchAgent(BaseAgent):
                             title=title_text,
                             section="Main Content",
                             paragraph_id="main",
-                            content=content[:Config.MAX_CONTENT_LENGTH],
+                            content=content[:self.settings.max_content_length],
                             relevance_score=relevance,
                             trust_flag=trust_info['trust_flag'],
                             trust_score=trust_info['trust_score'],
@@ -586,7 +586,11 @@ Example format: ["machine learning agent", "autonomous software", "AI system arc
             """Inner coroutine: search and extract for one term with parallel content extraction"""
             try:
                 # Run the synchronous search in a thread to avoid blocking
-                results = await asyncio.to_thread(self.search_web, term, Config.MAX_RESULTS_PER_SEARCH)
+                results = await asyncio.to_thread(
+                    self.search_web,
+                    term,
+                    self.settings.max_results_per_search,
+                )
                 print(f"   ✅ Found {len(results)} results for: '{term}'")
 
                 local_sources = []

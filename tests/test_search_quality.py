@@ -4,10 +4,15 @@ Run this to test if the filtering is working correctly.
 """
 
 import asyncio
-from agents.research_agent import ResearchAgent
-from agents.config import Config
+import sys
+from pathlib import Path
 
-async def test_search_quality():
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.agents.research_agent import ResearchAgent
+from app.agents.config import Config
+
+async def run_search_quality():
     """Test search quality with various queries"""
     
     print("=" * 70)
@@ -139,4 +144,4 @@ async def test_search_quality():
 
 if __name__ == "__main__":
     # Run the test
-    asyncio.run(test_search_quality())
+    asyncio.run(run_search_quality())

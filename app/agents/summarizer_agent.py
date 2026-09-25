@@ -156,7 +156,7 @@ Provide your summary now (2-3 sentences, factual and relevant):"""
             async with semaphore:
                 result = await summarize_source(source)
                 # OPTIMIZED: Minimal delay only between batches, not between all calls
-                await asyncio.sleep(Config.RATE_LIMIT_DELAY)
+                await asyncio.sleep(self.settings.rate_limit_delay)
                 return result
         
         # OPTIMIZED: Process all sources in parallel with concurrency limit

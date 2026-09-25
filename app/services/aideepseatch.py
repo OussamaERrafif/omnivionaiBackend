@@ -31,10 +31,10 @@ import asyncio
 import datetime
 
 # Import from agents package
-from agents import Orchestrator, Config
+from app.agents import Orchestrator, Config
 
 # Trusted domains system
-from trusted_domains import TrustedDomains
+from app.core.trusted_domains import TrustedDomains
 
 
 async def main():
@@ -73,11 +73,9 @@ async def main():
     #     print("\n   Example: export GOOGLE_API_KEY='your-actual-key'")
     #     return
     
-    # New OpenAI API key validation
-    if Config.OPENAI_API_KEY == "your-openai-api-key-here":
-        print("\n⚠️  Please set your OPENAI_API_KEY environment variable!")
-        print("   Get a free API key from: https://platform.openai.com/api-keys")
-        print("\n   Example: export OPENAI_API_KEY='your-actual-key'")
+    if not Config.get_llm_providers():
+        print("\n⚠️  Please configure an LLM provider before starting a search.")
+        print("   Set OPENAI_API_KEY, NVIDIA_API_KEY, or GROQ_API_KEY in backend/.env.")
         return
 
     # Create orchestrator
@@ -171,25 +169,24 @@ INSTALLATION INSTRUCTIONS:
    # New OpenAI API packages
    pip install langchain langchain-openai beautifulsoup4 requests duckduckgo-search aiohttp
 
-2. Get your OpenAI API key:
+2. Configure at least one supported LLM provider:
    # Old Google/Gemini API setup (commented out)
    # - Visit: https://makersuite.google.com/app/apikey
    # - Create a new API key
    # - Set it as environment variable:
    #   export GOOGLE_API_KEY='your-api-key-here'
    
-   # New OpenAI API setup
-   - Visit: https://platform.openai.com/api-keys
-   - Create a new API key
-   - Set it as environment variable:
-     export OPENAI_API_KEY='your-api-key-here'
+   - OpenAI: OPENAI_API_KEY
+   - NVIDIA: NVIDIA_API_KEY (uses https://integrate.api.nvidia.com/v1)
+   - Groq: GROQ_API_KEY (uses https://api.groq.com/openai/v1)
+   - Optional: set LLM_PROVIDER_ORDER=openai,nvidia,groq to control failover order
 
 3. Run the system:
    python multi_agent_search.py
 
 FEATURES:
 =========
-✅ OpenAI API (gpt-3.5-turbo) - replaced Gemini API
+✅ OpenAI-compatible provider failover (OpenAI, NVIDIA, and Groq)
 ✅ Free web search (DuckDuckGo)
 ✅ Precise citation tracking
 ✅ Section-level source attribution

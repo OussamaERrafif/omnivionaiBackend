@@ -15,10 +15,21 @@ logger = logging.getLogger(__name__)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-    raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+class _UnconfiguredSupabaseClient:
+    """Defers a missing optional Supabase configuration until a protected route is used."""
+
+    def __getattr__(self, _: str):
+        raise RuntimeError(
+            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for database-backed endpoints."
+        )
+
+
+supabase: Client | _UnconfiguredSupabaseClient
+if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+else:
+    supabase = _UnconfiguredSupabaseClient()
 
 
 class QuotaExceededError(Exception):

@@ -3,8 +3,8 @@ Configuration checker and tuning guide for search quality settings.
 Shows current settings and provides recommendations.
 """
 
-from agents.config import Config
-from trusted_domains import TrustedDomains
+from app.agents.config import Config
+from app.core.trusted_domains import TrustedDomains
 
 def display_config():
     """Display current configuration and recommendations"""

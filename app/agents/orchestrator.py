@@ -3,6 +3,7 @@ Orchestrator for Academic Research Paper Generator
 """
 
 import asyncio
+import dataclasses
 import json
 import math
 from datetime import datetime
@@ -18,7 +19,7 @@ from .reasoning_agent import ReasoningAgent
 from .source_citer_agent import SourceCiterAgent
 from .image_analyzer_agent import ImageAnalyzerAgent
 from .data_models import FinalAnswer
-from .config import Config
+from .config import Config, SearchSettings
 
 # Type alias for search modes
 SearchMode = Literal["deep", "moderate", "quick", "sla"]
@@ -62,6 +63,19 @@ class Orchestrator:
         self.citer_agent = SourceCiterAgent()
         self.image_analyzer = ImageAnalyzerAgent()
 
+    def _apply_search_settings(self, settings: SearchSettings) -> None:
+        """Apply isolated request settings to this orchestrator's agents."""
+        for agent in (
+            self.query_validator,
+            self.query_analyzer,
+            self.research_agent,
+            self.summarizer_agent,
+            self.verification_agent,
+            self.reasoning_agent,
+            self.image_analyzer,
+        ):
+            agent.settings = settings
+
     async def search(self, query: str, progress_callback=None, search_mode: SearchMode = "deep") -> FinalAnswer:
         """
         Execute the complete research pipeline for a given query.
@@ -94,40 +108,37 @@ class Orchestrator:
         print(f"📊 Mode config: {mode_config['description']}")
         print(f"⚙️  Settings: {mode_config['max_results_per_search']} sources, {mode_config['max_research_iterations']} iterations, {mode_config['request_timeout']}s timeout")
         
-        # Store mode config for access in _execute_search
-        self._current_mode_config = mode_config
-        
-        # Temporarily override config for this search
-        original_max_results = Config.MAX_RESULTS_PER_SEARCH
-        original_max_content = Config.MAX_CONTENT_LENGTH
-        original_max_iterations = Config.MAX_RESEARCH_ITERATIONS
-        original_enable_iterative = Config.ENABLE_ITERATIVE_RESEARCH
-        original_rate_limit = Config.RATE_LIMIT_DELAY
-        original_request_timeout = Config.REQUEST_TIMEOUT
-        original_max_retries = Config.MAX_RETRIES
-        
-        Config.MAX_RESULTS_PER_SEARCH = mode_config["max_results_per_search"]
-        Config.MAX_CONTENT_LENGTH = mode_config["max_content_length"]
-        Config.MAX_RESEARCH_ITERATIONS = mode_config["max_research_iterations"]
-        Config.ENABLE_ITERATIVE_RESEARCH = mode_config["enable_iterative_research"]
-        Config.RATE_LIMIT_DELAY = mode_config["rate_limit_delay"]
-        Config.REQUEST_TIMEOUT = mode_config["request_timeout"]
-        Config.MAX_RETRIES = mode_config["max_retries"]
-        
-        try:
-            return await self._execute_search(query, progress_callback)
-        finally:
-            # Restore original config
-            Config.MAX_RESULTS_PER_SEARCH = original_max_results
-            Config.MAX_CONTENT_LENGTH = original_max_content
-            Config.MAX_RESEARCH_ITERATIONS = original_max_iterations
-            Config.ENABLE_ITERATIVE_RESEARCH = original_enable_iterative
-            Config.RATE_LIMIT_DELAY = original_rate_limit
-            Config.REQUEST_TIMEOUT = original_request_timeout
-            Config.MAX_RETRIES = original_max_retries
-            self._current_mode_config = None
+        settings = Config.get_search_settings(search_mode)
+        self._apply_search_settings(settings)
+        return await self._execute_search(query, progress_callback, mode_config, settings)
+
+    async def execute(
+        self,
+        search_id: str,
+        query: str,
+        plan_type: str = "free",
+        metadata: dict | None = None,
+    ) -> dict:
+        """Compatibility entry point for the idempotent orchestration wrapper."""
+        search_mode = (metadata or {}).get("search_mode", "deep")
+        result = await self.search(query=query, search_mode=search_mode)
+        return {
+            "search_id": search_id,
+            "plan_type": plan_type,
+            "answer": result.answer,
+            "citations": [dataclasses.asdict(citation) for citation in result.citations],
+            "confidence_score": result.confidence_score,
+            "markdown_content": result.answer,
+            "tokens_used": 0,
+        }
     
-    async def _execute_search(self, query: str, progress_callback=None) -> FinalAnswer:
+    async def _execute_search(
+        self,
+        query: str,
+        progress_callback=None,
+        mode_config=None,
+        settings: SearchSettings | None = None,
+    ) -> FinalAnswer:
         """
         Internal method to execute the search pipeline with current config.
         
@@ -143,7 +154,8 @@ class Orchestrator:
         step_times = {}
         
         # Get mode config for conditional step execution
-        mode_config = getattr(self, '_current_mode_config', Config.SEARCH_MODES["deep"])
+        mode_config = mode_config or Config.SEARCH_MODES["deep"]
+        settings = settings or Config.default_search_settings()
         skip_validation = mode_config.get("skip_validation", False)
         skip_verification = mode_config.get("skip_verification", False)
         skip_reasoning = mode_config.get("skip_reasoning", False)
@@ -216,14 +228,14 @@ class Orchestrator:
         step_times["query_analysis"] = time.time() - step_start
 
         # Step 2: Research (Iterative or Standard)
-        if Config.ENABLE_ITERATIVE_RESEARCH:
+        if settings.enable_iterative_research:
             print("\n🔬 Starting iterative research...")
             step_start = time.time()
             await emit_progress("research", "started", "Gathering sources from the web...", 30.0)
             
             sources = await self.research_agent.process_iterative(
                 query_analysis, 
-                max_iterations=Config.MAX_RESEARCH_ITERATIONS,
+                max_iterations=settings.max_research_iterations,
                 progress_callback=emit_progress
             )
             print(f"   🎯 Completed iterative research: {len(sources)} total sources")

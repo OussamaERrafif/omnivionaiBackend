@@ -3,6 +3,49 @@ Configuration for Academic Research Paper Generator
 """
 
 import os
+from dataclasses import dataclass
+from typing import Mapping
+
+
+def _positive_int_from_env(name: str, default: int) -> int:
+    """Read a positive integer without making application startup brittle."""
+    try:
+        value = int(os.getenv(name, str(default)))
+        return value if value > 0 else default
+    except ValueError:
+        return default
+
+
+def _positive_float_from_env(name: str, default: float) -> float:
+    """Read a positive float without making application startup brittle."""
+    try:
+        value = float(os.getenv(name, str(default)))
+        return value if value > 0 else default
+    except ValueError:
+        return default
+
+
+@dataclass(frozen=True)
+class LLMProvider:
+    """Configuration for one OpenAI-compatible LLM provider."""
+
+    name: str
+    api_key: str
+    model: str
+    base_url: str | None = None
+
+
+@dataclass(frozen=True)
+class SearchSettings:
+    """Per-request settings that must not be shared between concurrent searches."""
+
+    max_results_per_search: int
+    max_content_length: int
+    max_research_iterations: int
+    enable_iterative_research: bool
+    rate_limit_delay: float
+    request_timeout: int
+    max_retries: int
 
 
 class Config:
@@ -22,12 +65,21 @@ class Config:
     # GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
     # MODEL_NAME = "gemini-2.5-flash"  # Free tier model
     
-    # OpenAI API Configuration
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "your-openai-api-key-here")
-    """str: OpenAI API key loaded from environment variable OPENAI_API_KEY"""
-    
-    MODEL_NAME = "gpt-5-nano-2025-08-07"  # Valid OpenAI model
-    """str: The OpenAI model name to use for all LLM operations"""
+    # LLM provider configuration. Providers use OpenAI-compatible APIs and are tried
+    # in LLM_PROVIDER_ORDER whenever a request fails. Never put real keys in source.
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+    NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "").strip()
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+
+    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-nano-2025-08-07").strip()
+    NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-super-120b-a12b").strip()
+    GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile").strip()
+    LLM_PROVIDER_ORDER = os.getenv("LLM_PROVIDER_ORDER", "openai,nvidia,groq").strip()
+    LLM_MAX_TOKENS = _positive_int_from_env("LLM_MAX_TOKENS", 4096)
+    LLM_TIMEOUT_SECONDS = _positive_float_from_env("LLM_TIMEOUT_SECONDS", 60.0)
+
+    # Backwards-compatible alias for integrations that only display the primary model.
+    MODEL_NAME = OPENAI_MODEL
     
     MAX_RESULTS_PER_SEARCH = 10  # OPTIMIZED: Increased from 2 to 10 for comprehensive search
     """int: Maximum number of search results to retrieve per search query"""
@@ -116,6 +168,71 @@ class Config:
         }
     }
     """dict: Search mode configurations with different parameters"""
+
+    @classmethod
+    def get_llm_providers(cls, environ: Mapping[str, str] | None = None) -> tuple[LLMProvider, ...]:
+        """Return configured providers in priority order without exposing secrets."""
+        env = os.environ if environ is None else environ
+        provider_order = env.get("LLM_PROVIDER_ORDER", cls.LLM_PROVIDER_ORDER)
+        names = [name.strip().lower() for name in provider_order.split(",") if name.strip()]
+
+        candidates = {
+            "openai": LLMProvider(
+                name="openai",
+                api_key=env.get("OPENAI_API_KEY", cls.OPENAI_API_KEY).strip(),
+                model=env.get("OPENAI_MODEL", cls.OPENAI_MODEL).strip() or cls.OPENAI_MODEL,
+            ),
+            "nvidia": LLMProvider(
+                name="nvidia",
+                api_key=env.get("NVIDIA_API_KEY", cls.NVIDIA_API_KEY).strip(),
+                model=env.get("NVIDIA_MODEL", cls.NVIDIA_MODEL).strip() or cls.NVIDIA_MODEL,
+                base_url="https://integrate.api.nvidia.com/v1",
+            ),
+            "groq": LLMProvider(
+                name="groq",
+                api_key=env.get("GROQ_API_KEY", cls.GROQ_API_KEY).strip(),
+                model=env.get("GROQ_MODEL", cls.GROQ_MODEL).strip() or cls.GROQ_MODEL,
+                base_url="https://api.groq.com/openai/v1",
+            ),
+        }
+
+        # Ignore unknown names and duplicate entries, while preserving configured order.
+        providers = []
+        seen = set()
+        for name in names:
+            if name in candidates and name not in seen:
+                seen.add(name)
+                provider = candidates[name]
+                if provider.api_key:
+                    providers.append(provider)
+        return tuple(providers)
+
+    @classmethod
+    def get_search_settings(cls, search_mode: str) -> SearchSettings:
+        """Build isolated settings for one search request."""
+        mode = cls.SEARCH_MODES.get(search_mode, cls.SEARCH_MODES["deep"])
+        return SearchSettings(
+            max_results_per_search=mode["max_results_per_search"],
+            max_content_length=mode["max_content_length"],
+            max_research_iterations=mode["max_research_iterations"],
+            enable_iterative_research=mode["enable_iterative_research"],
+            rate_limit_delay=mode["rate_limit_delay"],
+            request_timeout=mode["request_timeout"],
+            max_retries=mode["max_retries"],
+        )
+
+    @classmethod
+    def default_search_settings(cls) -> SearchSettings:
+        """Return settings equivalent to the legacy global defaults."""
+        return SearchSettings(
+            max_results_per_search=cls.MAX_RESULTS_PER_SEARCH,
+            max_content_length=cls.MAX_CONTENT_LENGTH,
+            max_research_iterations=cls.MAX_RESEARCH_ITERATIONS,
+            enable_iterative_research=cls.ENABLE_ITERATIVE_RESEARCH,
+            rate_limit_delay=cls.RATE_LIMIT_DELAY,
+            request_timeout=cls.REQUEST_TIMEOUT,
+            max_retries=cls.MAX_RETRIES,
+        )
     
     MAX_SOURCES_PER_DOMAIN_FINAL = 5    # Allow more sources per domain in final result
     """int: Maximum sources allowed from same domain in final aggregated results"""

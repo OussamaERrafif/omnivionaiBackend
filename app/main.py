@@ -32,24 +32,24 @@ import uuid
 import dataclasses
 
 # Import the existing search functionality
-from aideepseatch import Orchestrator
-from agents.data_models import FinalAnswer, SourceMetadata
+from app.services.aideepseatch import Orchestrator
+from app.agents.data_models import FinalAnswer, SourceMetadata
 
 # Import subscription middleware
-from subscription_middleware import check_user_quota, increment_user_search, get_quota_headers
+from app.core.middleware.subscription_middleware import check_user_quota, increment_user_search, get_quota_headers
 
 # Import history service
-from history_service import save_search_history, get_search_history, delete_search_history_item, clear_all_history
+from app.services.history_service import save_search_history, get_search_history, delete_search_history_item, clear_all_history
 
 # Import auth utilities
-from auth_utils import extract_user_from_token, get_optional_user_from_token
+from app.core.auth_utils import extract_user_from_token, get_optional_user_from_token
 
 # Import new backend-authoritative services
-from search_service import search_service
-from quota_service import quota_service
+from app.services.search_service import search_service
+from app.services.quota_service import quota_service
 
 # Import security middleware
-from security_middleware import (
+from app.core.middleware.security_middleware import (
     SecurityMiddleware,
     require_auth,
     optional_auth,
@@ -68,13 +68,17 @@ from security_middleware import (
 #     hash_query,
 #     normalize_query
 # )
-from performance_optimization import (
+from app.core.performance_optimization import (
     perf_monitor,
     hash_query,
     normalize_query
 )
 import os
 import time
+import logging
+
+# Configure logger
+logger = logging.getLogger(__name__)
 
 # Type alias for search modes
 SearchMode = Literal["deep", "moderate", "quick", "sla"]
@@ -223,7 +227,7 @@ app = FastAPI(
 # ============================================================================
 
 # Import security headers middleware
-from security_middleware import SecurityHeadersMiddleware
+from app.core.middleware.security_middleware import SecurityHeadersMiddleware
 
 # 1. Add Security Headers (FIRST - applies to all responses)
 app.add_middleware(SecurityHeadersMiddleware)
@@ -290,8 +294,9 @@ from starlette.middleware.gzip import GZipMiddleware
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 print("✅ GZIP compression enabled (70-80% bandwidth reduction)")
 
-# Global orchestrator instance
-orchestrator = Orchestrator()
+# Orchestrators are created per search so request-specific mode settings cannot
+# leak across concurrent users. Health and metadata endpoints do not require an
+# LLM key to be configured.
 
 # ============================================================================
 # Global Error Handlers
@@ -426,7 +431,7 @@ async def get_metrics():
 @app.get("/history")
 @require_auth
 async def get_history(
-    req: Request,
+    request: Request,
     limit: int = 20,
     offset: int = 0
 ):
@@ -442,7 +447,7 @@ async def get_history(
     - Pagination limits enforced
     
     Args:
-        req: FastAPI Request object
+        request: FastAPI Request object
         limit: Number of results to return (max 100)
         offset: Pagination offset
         
@@ -453,17 +458,37 @@ async def get_history(
         HTTPException 401: If user is not authenticated
         HTTPException 429: Rate limited
     """
-    # Extract user_id from request state (set by @require_auth)
-    user_id = req.state.user_id
-    
-    # Limit validation
-    limit = min(max(1, limit), 100)  # Between 1-100
-    offset = max(0, offset)  # Non-negative
-    
-    # Get history from backend service
-    history_data = await get_search_history(user_id, limit, offset)
-    
-    return JSONResponse(content=history_data)
+    try:
+        # Extract user_id from request state (set by @require_auth)
+        user_id = request.state.user_id
+        
+        logger.info(f"📜 [GET /history] Request from user: {user_id}, limit={limit}, offset={offset}")
+        
+        # Limit validation
+        limit = min(max(1, limit), 100)  # Between 1-100
+        offset = max(0, offset)  # Non-negative
+        
+        # Get history from backend service
+        history_list = await get_search_history(user_id, limit, offset)
+        
+        logger.info(f"✅ [GET /history] Retrieved {len(history_list)} items for user {user_id}")
+        
+        # Format response with pagination metadata
+        response_data = {
+            "history": history_list,
+            "total": len(history_list),  # TODO: Get actual total from DB
+            "page": (offset // limit) + 1,
+            "per_page": limit
+        }
+        
+        return JSONResponse(content=response_data)
+        
+    except Exception as e:
+        logger.error(f"❌ [GET /history] Error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve history: {str(e)}"
+        )
 
 
 @app.delete("/history/{search_id}")
@@ -675,7 +700,7 @@ async def backend_authoritative_search(
         query_hash = hash_query(query)  # Still need hash for metadata
         
         # Get user's plan type for token limits
-        from subscription_middleware import supabase as sub_supabase
+        from app.core.middleware.subscription_middleware import supabase as sub_supabase
         sub_result = sub_supabase.table('user_subscriptions') \
             .select('plan_type') \
             .eq('user_id', user_id) \
@@ -693,7 +718,8 @@ async def backend_authoritative_search(
                 "endpoint": "/api/search",
                 "timestamp": datetime.utcnow().isoformat(),
                 "query_hash": query_hash
-            }
+            },
+            search_mode=request.search_mode,
         )
         
         print(f"✅ Search completed: {result['search_id']}")
@@ -904,7 +930,7 @@ async def search_research_paper(
         # Execute the search with search mode and timeout protection
         try:
             result: FinalAnswer = await asyncio.wait_for(
-                orchestrator.search(request.query.strip(), search_mode=request.search_mode),
+                Orchestrator().search(request.query.strip(), search_mode=request.search_mode),
                 timeout=120.0  # 2 minute timeout
             )
         except asyncio.TimeoutError:
@@ -1053,7 +1079,9 @@ async def search_research_paper_get(
                 await progress_queue.put(f"data: {response.model_dump_json()}\n\n")
 
             # Start the search in a separate task with search mode
-            search_task = asyncio.create_task(orchestrator.search(query.strip(), queued_progress_callback, search_mode=search_mode))
+            search_task = asyncio.create_task(
+                Orchestrator().search(query.strip(), queued_progress_callback, search_mode=search_mode)
+            )
             
             # Yield progress updates as they come
             while not search_task.done():
@@ -1161,7 +1189,7 @@ async def search_research_paper_sync(query: str, search_mode: str = "deep"):
             "citations": [...],
             "confidence_score": 0.95,
             "markdown_content": "..."
-        }
+    }
         ```
     """
     try:
@@ -1169,7 +1197,7 @@ async def search_research_paper_sync(query: str, search_mode: str = "deep"):
             raise HTTPException(status_code=400, detail="Query cannot be empty")
 
         # Execute the search without progress callback with search mode
-        result: FinalAnswer = await orchestrator.search(query.strip(), search_mode=search_mode)
+        result: FinalAnswer = await Orchestrator().search(query.strip(), search_mode=search_mode)
 
         # Convert citations to dict format for JSON response (optimized)
         citations_data = [dataclasses.asdict(citation) for citation in result.citations]
@@ -1187,9 +1215,198 @@ async def search_research_paper_sync(query: str, search_mode: str = "deep"):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
+
+# ==================== SUBSCRIPTION & QUOTA ENDPOINTS (Privacy-Enhanced) ====================
+
+@app.get("/api/subscription")
+@require_auth
+async def get_user_subscription(request: Request):
+    """
+    Get current user's subscription details (privacy-enhanced).
+    
+    **Security Benefits:**
+    - Hides user_id from client/network tab
+    - Hides database table names
+    - Backend-authoritative (uses service role)
+    
+    **Authentication:**
+    - Requires valid JWT token
+    - User ID extracted from token server-side
+    
+    Args:
+        request: FastAPI Request object (contains user_id from @require_auth)
+        
+    Returns:
+        JSONResponse: User subscription data
+        
+    Raises:
+        HTTPException 401: If user is not authenticated
+        HTTPException 404: If subscription not found
+        HTTPException 500: If database error occurs
+    """
+    from app.services.quota_service import quota_service, supabase
+    
+    user_id = request.state.user_id
+    
+    try:
+        # Query Supabase server-side (hides user_id from client)
+        result = supabase.table("user_subscriptions")\
+            .select("*")\
+            .eq("user_id", user_id)\
+            .single()\
+            .execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+        
+        return JSONResponse(content=result.data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching subscription for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch subscription")
+
+
+@app.get("/api/plan-features/{plan_type}")
+async def get_plan_features(plan_type: str):
+    """
+    Get features for a specific plan type (public data).
+    
+    **Security:**
+    - No authentication required (public plan info)
+    - Hides database table names from client
+    - Input validation on plan_type
+    
+    Args:
+        plan_type: Plan type (free, pro, enterprise, trial)
+        
+    Returns:
+        JSONResponse: Plan features data
+        
+    Raises:
+        HTTPException 400: If plan_type is invalid
+        HTTPException 404: If plan not found
+        HTTPException 500: If database error occurs
+    """
+    from app.services.quota_service import supabase
+    
+    # Validate plan_type
+    valid_plans = ["free", "pro", "enterprise", "trial"]
+    if plan_type not in valid_plans:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid plan_type. Must be one of: {', '.join(valid_plans)}"
+        )
+    
+    try:
+        result = supabase.table("plan_features")\
+            .select("*")\
+            .eq("plan_type", plan_type)\
+            .single()\
+            .execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail=f"Plan '{plan_type}' not found")
+        
+        return JSONResponse(content=result.data)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching plan features for {plan_type}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch plan features")
+
+
+@app.get("/api/plan-features")
+async def get_all_plan_features():
+    """
+    Get all visible plan features for comparison (public data).
+    
+    **Security:**
+    - No authentication required (public plan info)
+    - Hides database table names from client
+    - Only returns visible plans
+    
+    Returns:
+        JSONResponse: Array of plan features
+        
+    Raises:
+        HTTPException 500: If database error occurs
+    """
+    from app.services.quota_service import supabase
+    
+    try:
+        result = supabase.table("plan_features")\
+            .select("*")\
+            .eq("is_visible", True)\
+            .order("display_order")\
+            .execute()
+        
+        return JSONResponse(content=result.data or [])
+        
+    except Exception as e:
+        logger.error(f"Error fetching all plan features: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch plan features")
+
+
+@app.get("/api/usage-logs")
+@require_auth
+async def get_usage_logs(request: Request, limit: int = 20):
+    """
+    Get user's search usage logs (privacy-enhanced).
+    
+    **Security Benefits:**
+    - Hides user_id from client/network tab
+    - Hides database table names
+    - Backend-authoritative query
+    - Pagination enforced
+    
+    **Authentication:**
+    - Requires valid JWT token
+    - User ID extracted from token server-side
+    
+    Args:
+        request: FastAPI Request object (contains user_id from @require_auth)
+        limit: Maximum number of logs to return (default 20, max 100)
+        
+    Returns:
+        JSONResponse: Array of search usage logs
+        
+    Raises:
+        HTTPException 401: If user is not authenticated
+        HTTPException 400: If limit is invalid
+        HTTPException 500: If database error occurs
+    """
+    from app.services.quota_service import supabase
+    
+    user_id = request.state.user_id
+    
+    # Validate and enforce limit
+    if limit < 1 or limit > 100:
+        raise HTTPException(
+            status_code=400, 
+            detail="Limit must be between 1 and 100"
+        )
+    
+    try:
+        result = supabase.table("search_usage_logs")\
+            .select("*")\
+            .eq("user_id", user_id)\
+            .order("searched_at", desc=True)\
+            .limit(limit)\
+            .execute()
+        
+        return JSONResponse(content=result.data or [])
+        
+    except Exception as e:
+        logger.error(f"Error fetching usage logs for user {user_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch usage logs")
+
+
 if __name__ == "__main__":
     uvicorn.run(
-        "app:app",
+        "app.main:app",
         host="0.0.0.0",
         port=8000,
         reload=True

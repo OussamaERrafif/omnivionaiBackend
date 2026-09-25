@@ -5,11 +5,13 @@ Handles search creation, execution, updates, and error handling
 
 import os
 import uuid
+import dataclasses
+import json
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 from supabase import create_client, Client
 import logging
-from quota_service import check_and_decrement_quota, refund_quota, QuotaExceededError
+from app.services.quota_service import check_and_decrement_quota, refund_quota, QuotaExceededError
 
 logger = logging.getLogger(__name__)
 
@@ -17,10 +19,21 @@ logger = logging.getLogger(__name__)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
-if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-    raise ValueError("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set")
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+class _UnconfiguredSupabaseClient:
+    """Keeps public API startup independent from optional Supabase credentials."""
+
+    def __getattr__(self, _: str):
+        raise RuntimeError(
+            "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for /api/search."
+        )
+
+
+supabase: Client | _UnconfiguredSupabaseClient
+if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
+    supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+else:
+    supabase = _UnconfiguredSupabaseClient()
 
 
 class SearchService:
@@ -76,7 +89,8 @@ class SearchService:
         user_id: str,
         query: str,
         plan_type: str,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        search_mode: str = "deep",
     ) -> Dict[str, Any]:
         """
         Complete search lifecycle:
@@ -111,16 +125,18 @@ class SearchService:
             search_result = await SearchService.create_search(user_id, query, metadata)
             search_id = search_result["search_id"]
             
-            # Step 3: Execute search (placeholder - integrate with your agent orchestrator)
-            # This would call your multi-agent pipeline
-            from agents.orchestrator import AgentOrchestrator
-            
-            orchestrator = AgentOrchestrator()
-            search_results = await orchestrator.execute(
-                search_id=search_id,
+            # Step 3: Execute the actual multi-agent pipeline.
+            from app.agents.orchestrator import Orchestrator as AgentOrchestrator
+            result = await AgentOrchestrator().search(
                 query=query,
-                plan_type=plan_type
+                search_mode=search_mode,
             )
+            search_results = {
+                "answer": result.answer,
+                "citations": [dataclasses.asdict(citation) for citation in result.citations],
+                "confidence_score": result.confidence_score,
+                "markdown_content": result.answer,
+            }
             
             # Step 4: Update with success
             await SearchService._update_search_success(
@@ -132,7 +148,12 @@ class SearchService:
                 "search_id": search_id,
                 "status": "success",
                 "results": search_results,
-                "quota_remaining": quota_result["searches_remaining"]
+                "quota_remaining": quota_result["searches_remaining"],
+                "quota": {
+                    "searches_remaining": quota_result["searches_remaining"],
+                    "searches_limit": quota_result["searches_limit"],
+                    "plan_type": quota_result.get("plan_type", plan_type),
+                },
             }
             
         except QuotaExceededError:
@@ -243,11 +264,39 @@ class SearchService:
         except Exception as e:
             logger.error(f"Error updating search progress: {str(e)}")
 
+    @staticmethod
+    async def stream_search_progress(
+        user_id: str,
+        query: str,
+        plan_type: str = "free",
+        search_mode: str = "deep",
+    ):
+        """Run the authoritative search lifecycle and emit valid SSE events."""
+        yield f"data: {json.dumps({'event': 'progress', 'status': 'started'})}\n\n"
+        try:
+            result = await SearchService.execute_search(
+                user_id=user_id,
+                query=query,
+                plan_type=plan_type,
+                metadata={"endpoint": "/api/search/stream"},
+                search_mode=search_mode,
+            )
+            yield f"data: {json.dumps({'event': 'result', 'result': result})}\n\n"
+        except Exception as error:
+            logger.exception("Streaming search failed")
+            yield f"data: {json.dumps({'event': 'error', 'message': str(error)})}\n\n"
+
 
 # Convenience functions
-async def execute_search(user_id: str, query: str, plan_type: str, metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+async def execute_search(
+    user_id: str,
+    query: str,
+    plan_type: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    search_mode: str = "deep",
+) -> Dict[str, Any]:
     """Execute a complete search"""
-    return await SearchService.execute_search(user_id, query, plan_type, metadata)
+    return await SearchService.execute_search(user_id, query, plan_type, metadata, search_mode)
 
 
 async def get_search_by_id(search_id: str, user_id: str) -> Optional[Dict[str, Any]]:
